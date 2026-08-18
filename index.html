@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Fútbol Jueves Mundial</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#10151a;
+    --surface:#1a2129;
+    --surface-2:#212b35;
+    --line:#2a3542;
+    --text:#eef2f5;
+    --text-dim:#8ea0ac;
+    --pitch:#2f9e56;
+    --pitch-dark:#1d6b3a;
+    --blue:#3568c4;
+    --red:#c23b3b;
+    --amber:#e2a63b;
+    --radius:14px;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:
+      radial-gradient(ellipse at top, #17222055 0%, transparent 60%),
+      var(--bg);
+    color:var(--text);
+    font-family:'Inter',sans-serif;
+    -webkit-tap-highlight-color:transparent;
+    padding-bottom:90px;
+  }
+  h1,h2,h3,.disp{font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:.03em;}
+
+  header.top{
+    padding:22px 18px 16px;
+    border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg,#151c22,#10151a);
+    position:sticky; top:0; z-index:20;
+  }
+  header.top .stripe{
+    height:4px; width:46px; background:var(--pitch); border-radius:3px; margin-bottom:10px;
+  }
+  header.top h1{font-size:22px; margin:0; font-weight:700;}
+  header.top p{margin:4px 0 0; color:var(--text-dim); font-size:13px;}
+
+  main{max-width:640px; margin:0 auto; padding:16px;}
+
+  nav.tabs{
+    position:fixed; bottom:0; left:0; right:0; z-index:30;
+    display:flex; background:#151c22; border-top:1px solid var(--line);
+    max-width:640px; margin:0 auto;
+  }
+  @media(min-width:640px){ nav.tabs{ left:50%; transform:translateX(-50%);} }
+  nav.tabs button{
+    flex:1; background:none; border:none; color:var(--text-dim);
+    font-family:'Inter'; font-size:11.5px; font-weight:600;
+    padding:12px 4px 10px; display:flex; flex-direction:column; align-items:center; gap:3px;
+    cursor:pointer;
+  }
+  nav.tabs button .ic{font-size:18px;}
+  nav.tabs button.active{color:var(--pitch);}
+
+  .view{display:none;}
+  .view.active{display:block; animation:fade .25s ease;}
+  @keyframes fade{from{opacity:0; transform:translateY(4px);} to{opacity:1; transform:none;}}
+
+  .card{
+    background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+    padding:16px; margin-bottom:14px;
+  }
+  label{display:block; font-size:12.5px; font-weight:600; color:var(--text-dim); margin:14px 0 6px; text-transform:uppercase; letter-spacing:.04em;}
+  label:first-child{margin-top:0;}
+  input[type=date], input[type=text], textarea{
+    width:100%; background:var(--surface-2); border:1px solid var(--line); color:var(--text);
+    border-radius:10px; padding:11px 12px; font-family:'Inter'; font-size:14.5px;
+  }
+  textarea{resize:vertical; min-height:64px;}
+  input:focus, textarea:focus{outline:2px solid var(--pitch); outline-offset:1px;}
+
+  .filebtn{
+    border:1.5px dashed var(--line); border-radius:12px; padding:22px 14px;
+    text-align:center; color:var(--text-dim); font-size:13.5px; cursor:pointer;
+    background:var(--surface-2); transition:border-color .15s;
+  }
+  .filebtn:hover{border-color:var(--pitch);}
+  .filebtn input{display:none;}
+  .filebtn .big{font-size:26px; display:block; margin-bottom:4px;}
+
+  .preview-img{max-width:100%; border-radius:10px; margin-top:10px; display:none; border:1px solid var(--line);}
+
+  button.primary{
+    width:100%; background:var(--pitch); color:#08160c; border:none; border-radius:10px;
+    padding:13px; font-weight:700; font-size:14.5px; font-family:'Inter'; cursor:pointer;
+    margin-top:16px;
+  }
+  button.primary:disabled{background:#33403a; color:#7c8a82; cursor:not-allowed;}
+  button.secondary{
+    width:100%; background:transparent; color:var(--text); border:1px solid var(--line); border-radius:10px;
+    padding:11px; font-weight:600; font-size:13.5px; cursor:pointer; margin-top:8px;
+  }
+  button.ghost{
+    background:none; border:none; color:var(--pitch); font-weight:600; font-size:13px; cursor:pointer; padding:6px 0;
+  }
+
+  .status{font-size:13px; color:var(--text-dim); margin-top:10px; display:flex; align-items:center; gap:8px;}
+  .spinner{width:14px; height:14px; border:2px solid var(--line); border-top-color:var(--pitch); border-radius:50%; animation:spin .7s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+
+  .roster{margin-top:14px;}
+  .team-block{margin-bottom:14px;}
+  .team-head{display:flex; align-items:center; gap:8px; margin-bottom:8px;}
+  .dot{width:10px; height:10px; border-radius:50%;}
+  .dot.blue{background:var(--blue);} .dot.red{background:var(--red);} .dot.other{background:var(--amber);}
+  .team-head span{font-family:'Oswald'; text-transform:uppercase; font-weight:600; font-size:13.5px; letter-spacing:.04em;}
+
+  .prow{
+    display:flex; align-items:center; gap:8px; background:var(--surface-2); border:1px solid var(--line);
+    border-radius:9px; padding:8px 10px; margin-bottom:6px;
+  }
+  .prow input[type=text]{flex:1; background:none; border:none; padding:2px; font-size:14px;}
+  .prow select{background:var(--surface); color:var(--text); border:1px solid var(--line); border-radius:6px; font-size:12px; padding:5px 6px;}
+  .prow button{background:none; border:none; color:#8a5555; font-size:16px; cursor:pointer; padding:2px 4px;}
+
+  .diff-box{
+    background:#221a12; border:1px solid #4a3a1f; border-radius:10px; padding:12px; margin-top:14px;
+  }
+  .diff-box h3{color:var(--amber); font-size:13px; margin:0 0 10px;}
+  .sub-row{display:flex; align-items:center; gap:10px; font-size:13.5px; padding:6px 0; border-bottom:1px solid #33281755;}
+  .sub-row:last-child{border-bottom:none;}
+  .sub-row .out{color:#e08787; font-weight:600;}
+  .sub-row .arrow{color:var(--text-dim);}
+  .sub-row .in{color:#8fd6a3; font-weight:600;}
+  .sub-row select{margin-left:auto; background:var(--surface-2); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:5px 6px; font-size:12px;}
+
+  /* Historial */
+  .partido-card{padding:0; overflow:hidden;}
+  .p-head{padding:14px 16px; display:flex; justify-content:space-between; align-items:center; cursor:pointer;}
+  .p-head .fecha{font-family:'Oswald'; font-weight:600; font-size:15px; text-transform:uppercase;}
+  .p-head .meta{color:var(--text-dim); font-size:12px; margin-top:2px;}
+  .p-head .chev{color:var(--text-dim); transition:transform .2s;}
+  .p-body{display:none; padding:0 16px 16px; border-top:1px solid var(--line);}
+  .p-body.open{display:block;}
+  .conv-text{background:var(--surface-2); border-left:3px solid var(--pitch); padding:10px 12px; border-radius:0 8px 8px 0; font-size:13.5px; font-style:italic; color:#d7dee2; margin:12px 0;}
+  .version-tag{display:inline-block; font-size:11px; font-weight:700; padding:3px 8px; border-radius:20px; margin-right:6px;}
+  .version-tag.valid{background:#1d6b3a44; color:#8fd6a3;}
+  .version-tag.invalid{background:#3a3a3a; color:var(--text-dim); text-decoration:line-through;}
+  .roster-mini{display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;}
+  .chip{font-size:12px; background:var(--surface-2); border:1px solid var(--line); padding:4px 9px; border-radius:20px;}
+
+  .empty{text-align:center; color:var(--text-dim); padding:50px 20px; font-size:13.5px;}
+  .empty .big{font-size:34px; display:block; margin-bottom:10px;}
+
+  .stat-row{display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid var(--line); font-size:14px;}
+  .stat-row:last-child{border-bottom:none;}
+  .stat-row .n{font-family:'Oswald'; font-weight:700; color:var(--amber); font-size:16px;}
+
+  .toolbar{display:flex; gap:8px; margin-top:4px;}
+  .toolbar button{flex:1;}
+
+  .toast{
+    position:fixed; bottom:100px; left:50%; transform:translateX(-50%);
+    background:var(--pitch); color:#08160c; padding:10px 18px; border-radius:30px;
+    font-weight:600; font-size:13.5px; z-index:50; opacity:0; pointer-events:none; transition:opacity .25s, transform .25s;
+  }
+  .toast.show{opacity:1; transform:translateX(-50%) translateY(-6px);}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="stripe"></div>
+  <h1>Fútbol Jueves Mundial</h1>
+  <p>Convocatorias, alineaciones y bajas del grupo</p>
+</header>
+
+<main>
+
+  <!-- VISTA: NUEVO PARTIDO -->
+  <section id="view-nuevo" class="view active">
+    <div class="card">
+      <label>Fecha del partido</label>
+      <input type="date" id="f-fecha">
+
+      <label>Texto de la convocatoria</label>
+      <textarea id="f-convocatoria" placeholder="Ej: Convocatoria para el jueves, se ruega puntualidad..."></textarea>
+
+      <label>Foto de la alineación</label>
+      <div class="filebtn" id="filebtn">
+        <span class="big">📷</span>
+        <span id="filebtn-label">Toca para subir la captura</span>
+        <input type="file" id="f-imagen" accept="image/*">
+      </div>
+      <img id="preview" class="preview-img">
+
+      <div id="status" class="status" style="display:none;"></div>
+
+      <div id="roster-editor" class="roster" style="display:none;"></div>
+      <div id="diff-editor"></div>
+
+      <button class="primary" id="btn-guardar" disabled>Guardar partido</button>
+    </div>
+  </section>
+
+  <!-- VISTA: HISTORIAL -->
+  <section id="view-historial" class="view">
+    <div class="toolbar" style="margin-bottom:14px;">
+      <button class="secondary" id="btn-export">⬇ Exportar JSON</button>
+      <button class="secondary" id="btn-import">⬆ Importar JSON</button>
+      <input type="file" id="f-import" accept="application/json" style="display:none;">
+    </div>
+    <div id="historial-list"></div>
+  </section>
+
+  <!-- VISTA: ESTADÍSTICAS -->
+  <section id="view-stats" class="view">
+    <div class="card">
+      <h3 style="margin-top:0; font-size:14px; color:var(--text-dim);">Bajas por jugador</h3>
+      <div id="stats-bajas"></div>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0; font-size:14px; color:var(--text-dim);">Veces que entra de suplente</h3>
+      <div id="stats-altas"></div>
+    </div>
+  </section>
+
+</main>
+
+<nav class="tabs">
+  <button class="tab-btn active" data-view="nuevo"><span class="ic">➕</span>Nuevo</button>
+  <button class="tab-btn" data-view="historial"><span class="ic">📋</span>Historial</button>
+  <button class="tab-btn" data-view="stats"><span class="ic">📊</span>Estadísticas</button>
+</nav>
+
+<div class="toast" id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+/* ---------- Conexión a Supabase ---------- */
+const SUPABASE_URL = 'https://qqmxxpbwvfalynltnpun.supabase.co';
+// Clave "anon"/publishable: está pensada para ir en el cliente, no es secreta.
+// El acceso real lo controlan las políticas RLS del proyecto.
+const SUPABASE_ANON_KEY = 'sb_publishable_EunJ0PMxSQMuScN5W5OXGA_1-MCKn__';
+let supabase = null;
+try{
+  if(!window.supabase) throw new Error('La librería de Supabase no se cargó (¿sin conexión a internet?)');
+  supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+}catch(err){
+  console.error('No se pudo inicializar Supabase:', err);
+}
+
+function supabaseListo(){
+  if(!supabase){
+    toast('⚠️ Sin conexión a la base de datos');
+    return false;
+  }
+  return true;
+}
+
+/* ---------- Estado (caché local hidratada desde Supabase) ---------- */
+let partidos = []; // se rellena al cargar la página, ver cargarDesdeSupabase()
+let extraccionActual = null; // {equipos:[{nombre,color,jugadores:[{nombre,posicion}]}]}
+let imagenBase64 = null;
+let cambiosPropuestos = []; // para el diff antes de guardar
+
+async function cargarDesdeSupabase(){
+  if(!supabaseListo()) return;
+  const { data, error } = await supabase
+    .from('partidos')
+    .select('*, alineaciones(*, jugadores_alineacion(*), cambios(*))')
+    .order('fecha', { ascending: false });
+  if(error){
+    console.error(error);
+    toast('Error al cargar datos de Supabase');
+    return;
+  }
+  partidos = (data || []).map(p => ({
+    id: p.id,
+    fecha: p.fecha,
+    convocatoria: {
+      texto: p.convocatoria_texto || '',
+      fecha_mensaje: p.convocatoria_fecha_mensaje,
+      es_borrador: p.es_borrador
+    },
+    alineaciones: (p.alineaciones || [])
+      .sort((a,b)=>a.version-b.version)
+      .map(a => ({
+        id: a.id,
+        version: a.version,
+        valida: a.valida,
+        fecha_mensaje: a.fecha_mensaje,
+        imagen_path: a.imagen_path,
+        jugadores: (a.jugadores_alineacion || []).map(j => ({nombre:j.nombre, posicion:j.posicion, equipo:j.equipo})),
+        cambios_respecto_anterior: (a.cambios || []).map(c => ({jugador_baja:c.jugador_baja, jugador_entra:c.jugador_entra}))
+      }))
+  }));
+}
+
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'), 2200);
+}
+
+/* ---------- Navegación de pestañas ---------- */
+document.querySelectorAll('.tab-btn').forEach(btn=>{
+  btn.addEventListener('click', async ()=>{
+    document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('view-'+btn.dataset.view).classList.add('active');
+    if(btn.dataset.view === 'historial'){ await cargarDesdeSupabase(); renderHistorial(); }
+    if(btn.dataset.view === 'stats'){ await cargarDesdeSupabase(); renderStats(); }
+  });
+});
+
+/* fecha por defecto: hoy */
+document.getElementById('f-fecha').valueAsDate = new Date();
+
+/* ---------- Subida de imagen + llamada a la API de Claude (visión) ---------- */
+const filebtn = document.getElementById('filebtn');
+const fInput = document.getElementById('f-imagen');
+filebtn.addEventListener('click', ()=> fInput.click());
+
+fInput.addEventListener('change', async (e)=>{
+  const file = e.target.files[0];
+  if(!file) return;
+  const resized = await comprimirImagen(file, 900, 0.75);
+  imagenBase64 = resized;
+  document.getElementById('preview').src = 'data:image/jpeg;base64,' + resized;
+  document.getElementById('preview').style.display = 'block';
+  document.getElementById('filebtn-label').textContent = file.name;
+  await extraerAlineacion(resized);
+});
+
+function comprimirImagen(file, maxWidth, calidad){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onload = (ev)=>{
+      const img = new Image();
+      img.onload = ()=>{
+        const scale = Math.min(1, maxWidth / img.width);
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width * scale;
+        canvas.height = img.height * scale;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL('image/jpeg', calidad);
+        resolve(dataUrl.split(',')[1]);
+      };
+      img.onerror = reject;
+      img.src = ev.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function extraerAlineacion(base64){
+  const statusEl = document.getElementById('status');
+  statusEl.style.display = 'flex';
+  statusEl.innerHTML = '<div class="spinner"></div> Leyendo la alineación de la imagen...';
+  document.getElementById('roster-editor').style.display = 'none';
+
+  const prompt = `Esta imagen es una alineación de fútbol generada con un "squad builder": dos equipos enfrentados en un campo vertical, cada jugador representado por una camiseta de color con su nombre encima. Un equipo ataca hacia arriba (portero arriba) y el otro hacia abajo (portero abajo).
+
+Devuelve EXCLUSIVAMENTE un JSON válido (sin texto adicional, sin markdown, sin backticks) con esta forma exacta:
+{
+  "equipos": [
+    {
+      "color": "azul" | "rojo" | otro color de camiseta que veas,
+      "jugadores": [
+        {"nombre": "nombre exacto tal cual aparece, incluye apodos o símbolos como ⚡ si están junto al nombre", "posicion": "portero" | "defensa" | "medio" | "delantero"}
+      ]
+    }
+  ]
+}
+
+Incluye TODOS los jugadores visibles de ambos equipos, en el orden en que aparecen de arriba a abajo. Infiere la posición por su fila en el campo (portero en la portería, defensas en la línea siguiente, medios en el centro, delantero cerca del centro del campo).`;
+
+  try{
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens: 1000,
+        messages: [{
+          role: "user",
+          content: [
+            {type:"image", source:{type:"base64", media_type:"image/jpeg", data: base64}},
+            {type:"text", text: prompt}
+          ]
+        }]
+      })
+    });
+    const data = await response.json();
+    const textBlock = (data.content || []).find(b => b.type === 'text');
+    if(!textBlock) throw new Error('Sin respuesta de texto');
+    const clean = textBlock.text.replace(/```json|```/g, '').trim();
+    const parsed = JSON.parse(clean);
+    extraccionActual = parsed;
+    statusEl.innerHTML = '✅ Alineación leída. Revisa y corrige si hace falta.';
+    renderRosterEditor(parsed);
+  }catch(err){
+    console.error(err);
+    statusEl.innerHTML = '⚠️ No se pudo leer automáticamente. Añade los jugadores a mano abajo.';
+    extraccionActual = {equipos:[{color:'azul', jugadores:[]}, {color:'rojo', jugadores:[]}]};
+    renderRosterEditor(extraccionActual);
+  }
+  actualizarBotonGuardar();
+}
+
+/* ---------- Editor de plantilla extraída ---------- */
+function renderRosterEditor(data){
+  const el = document.getElementById('roster-editor');
+  el.style.display = 'block';
+  el.innerHTML = '';
+  data.equipos.forEach((equipo, ei)=>{
+    const block = document.createElement('div');
+    block.className = 'team-block';
+    const dotClass = equipo.color === 'azul' ? 'blue' : (equipo.color === 'rojo' ? 'red' : 'other');
+    block.innerHTML = `<div class="team-head"><span class="dot ${dotClass}"></span><span>Equipo ${equipo.color}</span></div>
+      <div class="prows" data-team="${ei}"></div>
+      <button class="ghost" data-add="${ei}">+ Añadir jugador</button>`;
+    el.appendChild(block);
+    const rowsWrap = block.querySelector('.prows');
+    equipo.jugadores.forEach((j, ji)=> rowsWrap.appendChild(crearFilaJugador(ei, ji, j)));
+    block.querySelector('[data-add]').addEventListener('click', ()=>{
+      equipo.jugadores.push({nombre:'', posicion:'medio'});
+      renderRosterEditor(data);
+    });
+  });
+}
+
+function crearFilaJugador(ei, ji, jugador){
+  const row = document.createElement('div');
+  row.className = 'prow';
+  row.innerHTML = `
+    <input type="text" value="${escapeHtml(jugador.nombre)}" placeholder="Nombre">
+    <select>
+      <option value="portero" ${jugador.posicion==='portero'?'selected':''}>Portero</option>
+      <option value="defensa" ${jugador.posicion==='defensa'?'selected':''}>Defensa</option>
+      <option value="medio" ${jugador.posicion==='medio'?'selected':''}>Medio</option>
+      <option value="delantero" ${jugador.posicion==='delantero'?'selected':''}>Delantero</option>
+    </select>
+    <button title="Quitar">✕</button>`;
+  const [inputEl, selectEl, btnEl] = row.children;
+  inputEl.addEventListener('input', ()=> jugador.nombre = inputEl.value);
+  selectEl.addEventListener('change', ()=> jugador.posicion = selectEl.value);
+  btnEl.addEventListener('click', ()=>{
+    const equipo = extraccionActual.equipos[ei];
+    equipo.jugadores.splice(ji, 1);
+    renderRosterEditor(extraccionActual);
+  });
+  return row;
+}
+
+function escapeHtml(s){
+  return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* ---------- Detección de cambios respecto a versión anterior ---------- */
+function todosLosJugadores(data){
+  return data.equipos.flatMap(e => e.jugadores.map(j => j.nombre.trim())).filter(Boolean);
+}
+
+document.getElementById('f-fecha').addEventListener('change', async ()=>{
+  await cargarDesdeSupabase();
+  chequearVersionAnterior();
+});
+
+function chequearVersionAnterior(){
+  const fecha = document.getElementById('f-fecha').value;
+  const partido = partidos.find(p => p.fecha === fecha);
+  const diffBox = document.getElementById('diff-editor');
+  diffBox.innerHTML = '';
+  cambiosPropuestos = [];
+  if(!partido || !extraccionActual) return;
+
+  const anterior = partido.alineaciones.find(a => a.valida);
+  if(!anterior) return;
+
+  const nombresAntes = new Set(anterior.jugadores.map(j=>j.nombre));
+  const nombresAhora = new Set(todosLosJugadores(extraccionActual));
+  const bajas = [...nombresAntes].filter(n => !nombresAhora.has(n));
+  const altas = [...nombresAhora].filter(n => !nombresAntes.has(n));
+
+  if(bajas.length === 0 && altas.length === 0) return;
+
+  const box = document.createElement('div');
+  box.className = 'diff-box';
+  box.innerHTML = `<h3>⚠️ Ya existe una alineación para esta fecha — se detectaron cambios</h3>`;
+  bajas.forEach((baja, i)=>{
+    const alta = altas[i] || null;
+    cambiosPropuestos.push({jugador_baja: baja, jugador_entra: alta});
+    const row = document.createElement('div');
+    row.className = 'sub-row';
+    row.innerHTML = `<span class="out">${escapeHtml(baja)}</span><span class="arrow">→</span>
+      <span class="in">${alta ? escapeHtml(alta) : '(sin sustituto)'}</span>`;
+    box.appendChild(row);
+  });
+  // altas sobrantes sin baja emparejada (equipo creció)
+  altas.slice(bajas.length).forEach(alta=>{
+    const row = document.createElement('div');
+    row.className = 'sub-row';
+    row.innerHTML = `<span class="arrow">Nueva incorporación:</span> <span class="in">${escapeHtml(alta)}</span>`;
+    box.appendChild(row);
+  });
+  const note = document.createElement('p');
+  note.style.cssText = 'font-size:12px;color:var(--text-dim);margin:10px 0 0;';
+  note.textContent = 'Al guardar, esta versión anterior quedará marcada como no válida.';
+  box.appendChild(note);
+  diffBox.appendChild(box);
+}
+
+/* re-chequear diffs cuando cambian los nombres tras la extracción */
+const observer = new MutationObserver(chequearVersionAnterior);
+observer.observe(document.getElementById('roster-editor'), {childList:true, subtree:true});
+
+/* ---------- Guardar partido ---------- */
+function actualizarBotonGuardar(){
+  document.getElementById('btn-guardar').disabled = !extraccionActual;
+}
+
+document.getElementById('btn-guardar').addEventListener('click', async ()=>{
+  if(!supabaseListo()) return;
+  const fecha = document.getElementById('f-fecha').value;
+  const textoConv = document.getElementById('f-convocatoria').value.trim();
+  if(!fecha){ toast('Falta la fecha'); return; }
+  if(!extraccionActual){ toast('Falta la alineación'); return; }
+
+  const jugadoresPlano = extraccionActual.equipos.flatMap(e =>
+    e.jugadores.filter(j=>j.nombre.trim()).map(j => ({nombre:j.nombre.trim(), posicion:j.posicion, equipo:e.color}))
+  );
+
+  const btnGuardar = document.getElementById('btn-guardar');
+  btnGuardar.disabled = true;
+  btnGuardar.textContent = 'Guardando...';
+
+  const partidoExistente = partidos.find(p => p.fecha === fecha);
+
+  const { error: errPartido } = await supabase.from('partidos').upsert({
+    id: fecha,
+    fecha: fecha,
+    convocatoria_texto: textoConv || (partidoExistente ? partidoExistente.convocatoria.texto : ''),
+    convocatoria_fecha_mensaje: new Date().toISOString(),
+    es_borrador: true
+  }, { onConflict: 'id' });
+
+  if(errPartido){ console.error(errPartido); toast('Error guardando el partido'); btnGuardar.disabled = false; btnGuardar.textContent = 'Guardar partido'; return; }
+
+  const nuevaVersion = partidoExistente
+    ? Math.max(...partidoExistente.alineaciones.map(a=>a.version), 0) + 1
+    : 1;
+  const alineacionId = `${fecha}-v${nuevaVersion}`;
+
+  // La tabla "alineaciones" tiene un trigger que invalida automáticamente
+  // la versión anterior vigente del mismo partido al insertar esta.
+  const { error: errAlineacion } = await supabase.from('alineaciones').insert({
+    id: alineacionId,
+    partido_id: fecha,
+    version: nuevaVersion,
+    valida: true,
+    fecha_mensaje: new Date().toISOString(),
+    imagen_path: imagenBase64 ? `${alineacionId}.jpg` : null
+  });
+
+  if(errAlineacion){ console.error(errAlineacion); toast('Error guardando la alineación'); btnGuardar.disabled = false; btnGuardar.textContent = 'Guardar partido'; return; }
+
+  if(jugadoresPlano.length){
+    const { error: errJug } = await supabase.from('jugadores_alineacion').insert(
+      jugadoresPlano.map(j => ({alineacion_id: alineacionId, nombre: j.nombre, posicion: j.posicion, equipo: j.equipo}))
+    );
+    if(errJug) console.error(errJug);
+  }
+
+  if(cambiosPropuestos.length){
+    const { error: errCambios } = await supabase.from('cambios').insert(
+      cambiosPropuestos.map(c => ({alineacion_id: alineacionId, jugador_baja: c.jugador_baja, jugador_entra: c.jugador_entra}))
+    );
+    if(errCambios) console.error(errCambios);
+  }
+
+  await cargarDesdeSupabase();
+  toast('Partido guardado ✅');
+  btnGuardar.disabled = false;
+  btnGuardar.textContent = 'Guardar partido';
+  resetFormulario();
+});
+
+function resetFormulario(){
+  extraccionActual = null;
+  imagenBase64 = null;
+  cambiosPropuestos = [];
+  document.getElementById('f-convocatoria').value = '';
+  document.getElementById('f-imagen').value = '';
+  document.getElementById('preview').style.display = 'none';
+  document.getElementById('filebtn-label').textContent = 'Toca para subir la captura';
+  document.getElementById('roster-editor').style.display = 'none';
+  document.getElementById('roster-editor').innerHTML = '';
+  document.getElementById('diff-editor').innerHTML = '';
+  document.getElementById('status').style.display = 'none';
+  actualizarBotonGuardar();
+  document.getElementById('f-fecha').valueAsDate = new Date();
+}
+
+/* ---------- Historial ---------- */
+function renderHistorial(){
+  const wrap = document.getElementById('historial-list');
+  wrap.innerHTML = '';
+  if(partidos.length === 0){
+    wrap.innerHTML = `<div class="empty"><span class="big">🗓️</span>Todavía no hay partidos guardados.<br>Añade el primero desde la pestaña "Nuevo".</div>`;
+    return;
+  }
+  partidos.forEach(p=>{
+    const card = document.createElement('div');
+    card.className = 'card partido-card';
+    const fechaFmt = new Date(p.fecha + 'T00:00:00').toLocaleDateString('es-ES', {weekday:'long', day:'numeric', month:'long'});
+    const nVersiones = p.alineaciones.length;
+    card.innerHTML = `
+      <div class="p-head">
+        <div>
+          <div class="fecha">${fechaFmt}</div>
+          <div class="meta">${nVersiones} versión${nVersiones!==1?'es':''} de alineación</div>
+        </div>
+        <span class="chev">▾</span>
+      </div>
+      <div class="p-body"></div>`;
+    const head = card.querySelector('.p-head');
+    const body = card.querySelector('.p-body');
+    head.addEventListener('click', ()=>{
+      body.classList.toggle('open');
+      head.querySelector('.chev').style.transform = body.classList.contains('open') ? 'rotate(180deg)' : 'none';
+    });
+
+    const convDiv = document.createElement('div');
+    convDiv.className = 'conv-text';
+    convDiv.textContent = p.convocatoria.texto || '(sin texto de convocatoria)';
+    body.appendChild(convDiv);
+
+    [...p.alineaciones].sort((a,b)=>b.version-a.version).forEach(a=>{
+      const vDiv = document.createElement('div');
+      vDiv.style.marginBottom = '14px';
+      vDiv.innerHTML = `<span class="version-tag ${a.valida?'valid':'invalid'}">v${a.version} ${a.valida?'vigente':'sustituida'}</span>`;
+      if(a.cambios_respecto_anterior && a.cambios_respecto_anterior.length){
+        const diffBox = document.createElement('div');
+        diffBox.className = 'diff-box';
+        diffBox.style.marginTop = '8px';
+        a.cambios_respecto_anterior.forEach(c=>{
+          diffBox.innerHTML += `<div class="sub-row"><span class="out">${escapeHtml(c.jugador_baja)}</span><span class="arrow">→</span><span class="in">${c.jugador_entra ? escapeHtml(c.jugador_entra) : '(sin sustituto)'}</span></div>`;
+        });
+        vDiv.appendChild(diffBox);
+      }
+      const chips = document.createElement('div');
+      chips.className = 'roster-mini';
+      a.jugadores.forEach(j=>{
+        const c = document.createElement('span');
+        c.className = 'chip';
+        c.textContent = j.nombre;
+        chips.appendChild(c);
+      });
+      vDiv.appendChild(chips);
+      body.appendChild(vDiv);
+    });
+
+    wrap.appendChild(card);
+  });
+}
+
+/* ---------- Estadísticas ---------- */
+function renderStats(){
+  const bajasCount = {};
+  const altasCount = {};
+  partidos.forEach(p=>{
+    p.alineaciones.forEach(a=>{
+      (a.cambios_respecto_anterior||[]).forEach(c=>{
+        bajasCount[c.jugador_baja] = (bajasCount[c.jugador_baja]||0) + 1;
+        if(c.jugador_entra) altasCount[c.jugador_entra] = (altasCount[c.jugador_entra]||0) + 1;
+      });
+    });
+  });
+
+  const bajasEl = document.getElementById('stats-bajas');
+  const altasEl = document.getElementById('stats-altas');
+  bajasEl.innerHTML = '';
+  altasEl.innerHTML = '';
+
+  const bajasOrdenadas = Object.entries(bajasCount).sort((a,b)=>b[1]-a[1]);
+  const altasOrdenadas = Object.entries(altasCount).sort((a,b)=>b[1]-a[1]);
+
+  if(bajasOrdenadas.length === 0){
+    bajasEl.innerHTML = '<p style="color:var(--text-dim); font-size:13px;">Aún no se han registrado bajas.</p>';
+  } else {
+    bajasOrdenadas.forEach(([nombre, n])=>{
+      bajasEl.innerHTML += `<div class="stat-row"><span>${escapeHtml(nombre)}</span><span class="n">${n}</span></div>`;
+    });
+  }
+
+  if(altasOrdenadas.length === 0){
+    altasEl.innerHTML = '<p style="color:var(--text-dim); font-size:13px;">Aún no hay sustituciones registradas.</p>';
+  } else {
+    altasOrdenadas.forEach(([nombre, n])=>{
+      altasEl.innerHTML += `<div class="stat-row"><span>${escapeHtml(nombre)}</span><span class="n">${n}</span></div>`;
+    });
+  }
+}
+
+/* ---------- Importar / exportar JSON (para la carga histórica) ---------- */
+document.getElementById('btn-export').addEventListener('click', ()=>{
+  const blob = new Blob([JSON.stringify(partidos, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'alineaciones-backup.json';
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+document.getElementById('btn-import').addEventListener('click', ()=> document.getElementById('f-import').click());
+document.getElementById('f-import').addEventListener('change', async (e)=>{
+  const file = e.target.files[0];
+  if(!file) return;
+  if(!supabaseListo()){ e.target.value = ''; return; }
+  const btnImport = document.getElementById('btn-import');
+  try{
+    const texto = await file.text();
+    const importados = JSON.parse(texto);
+    if(!Array.isArray(importados)) throw new Error('Formato inválido');
+
+    btnImport.disabled = true;
+    btnImport.textContent = `Importando 0/${importados.length}...`;
+
+    for(let i=0; i<importados.length; i++){
+      const p = importados[i];
+      btnImport.textContent = `Importando ${i+1}/${importados.length}...`;
+
+      await supabase.from('partidos').upsert({
+        id: p.fecha,
+        fecha: p.fecha,
+        convocatoria_texto: p.convocatoria?.texto || '',
+        convocatoria_fecha_mensaje: p.convocatoria?.fecha_mensaje || new Date().toISOString(),
+        es_borrador: true
+      }, { onConflict: 'id' });
+
+      for(const a of (p.alineaciones || [])){
+        const alineacionId = a.id || `${p.fecha}-v${a.version}`;
+        await supabase.from('alineaciones').upsert({
+          id: alineacionId,
+          partido_id: p.fecha,
+          version: a.version,
+          valida: !!a.valida,
+          fecha_mensaje: a.fecha_mensaje || new Date().toISOString(),
+          imagen_path: a.imagen_path || null
+        }, { onConflict: 'id' });
+
+        // idempotente: si se reimporta el mismo fichero, no se duplican jugadores/cambios
+        await supabase.from('jugadores_alineacion').delete().eq('alineacion_id', alineacionId);
+        if((a.jugadores || []).length){
+          await supabase.from('jugadores_alineacion').insert(
+            a.jugadores.map(j => ({alineacion_id: alineacionId, nombre: j.nombre, posicion: j.posicion || '', equipo: j.equipo || ''}))
+          );
+        }
+
+        await supabase.from('cambios').delete().eq('alineacion_id', alineacionId);
+        if((a.cambios_respecto_anterior || []).length){
+          await supabase.from('cambios').insert(
+            a.cambios_respecto_anterior.map(c => ({alineacion_id: alineacionId, jugador_baja: c.jugador_baja, jugador_entra: c.jugador_entra}))
+          );
+        }
+      }
+    }
+
+    await cargarDesdeSupabase();
+    toast(`Importados ${importados.length} partidos`);
+    renderHistorial();
+  }catch(err){
+    toast('Error al importar el JSON');
+    console.error(err);
+  } finally {
+    btnImport.disabled = false;
+    btnImport.textContent = '⬆ Importar JSON';
+    e.target.value = '';
+  }
+});
+
+/* ---------- Carga inicial ---------- */
+cargarDesdeSupabase();
+</script>
+</body>
+</html>
