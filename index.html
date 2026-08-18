@@ -1098,12 +1098,19 @@ async function generarLibroPDF(){
     await cargarDesdeSupabase();
 
     const ordenados = [...partidos].sort((a,b)=> a.fecha < b.fecha ? -1 : 1); // más antiguo primero
-    const conVigente = ordenados
-      .map(p => ({ p, vigente: p.alineaciones.find(a=>a.valida) }))
-      .filter(x => x.vigente);
+    // Incluye cualquier partido con convocatoria o alguna alineación, no solo los que tengan
+    // una versión marcada como "vigente" (los importados del histórico pueden no tenerla).
+    const paginas = ordenados
+      .filter(p => (p.convocatoria.texto && p.convocatoria.texto.trim()) || p.alineaciones.length)
+      .map(p => {
+        const vigente = p.alineaciones.find(a => a.valida)
+          || [...p.alineaciones].sort((a,b) => b.version - a.version)[0]
+          || null;
+        return { p, vigente };
+      });
 
-    if(conVigente.length === 0){
-      toast('No hay partidos con alineación vigente para incluir en el libro');
+    if(paginas.length === 0){
+      toast('No hay partidos con datos para incluir en el libro');
       return;
     }
 
@@ -1113,12 +1120,12 @@ async function generarLibroPDF(){
     const pageHeight = doc.internal.pageSize.getHeight();
     const margin = 18;
 
-    for(let i=0; i<conVigente.length; i++){
-      const { p, vigente } = conVigente[i];
+    for(let i=0; i<paginas.length; i++){
+      const { p, vigente } = paginas[i];
       if(i > 0) doc.addPage();
       let y = margin;
 
-      statusLibro.innerHTML = `<div class="spinner"></div> Preparando página ${i+1}/${conVigente.length}...`;
+      statusLibro.innerHTML = `<div class="spinner"></div> Preparando página ${i+1}/${paginas.length}...`;
 
       doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(130);
       doc.text('FÚTBOL JUEVES MUNDIAL', margin, y);
@@ -1142,20 +1149,26 @@ async function generarLibroPDF(){
         y += 10;
       }
 
-      if(p.convocatoria.texto){
+      if(p.convocatoria.texto && p.convocatoria.texto.trim()){
         doc.setFont('helvetica','italic'); doc.setFontSize(10); doc.setTextColor(90);
         const lineas = doc.splitTextToSize(p.convocatoria.texto, pageWidth - margin*2);
         doc.text(lineas, margin, y);
         y += lineas.length * 4.8 + 6;
+      } else {
+        doc.setFont('helvetica','italic'); doc.setFontSize(9.5); doc.setTextColor(160);
+        doc.text('(Sin texto de convocatoria)', margin, y);
+        y += 8;
       }
 
-      if(vigente.imagen_url){
+      const cambios = (vigente && vigente.cambios_respecto_anterior) ? vigente.cambios_respecto_anterior : [];
+      const altoBloqueCambios = cambios.length ? (13 + cambios.length * 6 + 4) : 0;
+
+      if(vigente && vigente.imagen_url){
         try{
           const dataUrl = await urlAImagenBase64(vigente.imagen_url);
           const dims = await medirImagen(dataUrl);
-          const espacioCambios = (vigente.cambios_respecto_anterior||[]).length ? 12 + vigente.cambios_respecto_anterior.length * 5.5 : 0;
           const maxW = pageWidth - margin*2;
-          const maxH = pageHeight - y - 18 - espacioCambios;
+          const maxH = pageHeight - y - 18 - altoBloqueCambios - (altoBloqueCambios ? 8 : 0);
           let w = maxW, h = w * (dims.height/dims.width);
           if(h > maxH){ h = maxH; w = h * (dims.width/dims.height); }
           const x = margin + (maxW - w)/2;
@@ -1167,21 +1180,38 @@ async function generarLibroPDF(){
           doc.text('(No se pudo cargar la imagen de esta alineación)', margin, y);
           y += 8;
         }
+      } else {
+        doc.setFont('helvetica','italic'); doc.setFontSize(9.5); doc.setTextColor(160);
+        doc.text('(Sin foto de alineación para este día)', margin, y);
+        y += 8;
       }
 
-      if(vigente.cambios_respecto_anterior && vigente.cambios_respecto_anterior.length){
-        doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.setTextColor(180,130,40);
-        doc.text('Bajas y cambios de esta jornada', margin, y);
-        y += 6;
-        doc.setFont('helvetica','normal'); doc.setFontSize(9.5); doc.setTextColor(50);
-        vigente.cambios_respecto_anterior.forEach(c=>{
-          doc.text(`${c.jugador_baja}  ->  ${c.jugador_entra || '(sin sustituto)'}`, margin, y);
-          y += 5.3;
+      // Bloque visual de bajas y sustituciones
+      if(cambios.length){
+        doc.setFillColor(255,248,232);
+        doc.setDrawColor(226,166,59);
+        doc.roundedRect(margin, y, pageWidth - margin*2, altoBloqueCambios, 2.5, 2.5, 'FD');
+        let yc = y + 8;
+        doc.setFont('helvetica','bold'); doc.setFontSize(10.5); doc.setTextColor(160,110,30);
+        doc.text('Bajas y sustituciones de esta jornada', margin + 5, yc);
+        yc += 6.5;
+        doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
+        cambios.forEach(c=>{
+          doc.setTextColor(190,60,60);
+          doc.text(c.jugador_baja, margin + 5, yc);
+          const anchoBaja = doc.getTextWidth(c.jugador_baja);
+          doc.setTextColor(120,120,120);
+          doc.text('  ->  ', margin + 5 + anchoBaja, yc);
+          const anchoFlecha = doc.getTextWidth('  ->  ');
+          doc.setTextColor(40,120,70);
+          doc.text(c.jugador_entra || '(sin sustituto)', margin + 5 + anchoBaja + anchoFlecha, yc);
+          yc += 6;
         });
+        y += altoBloqueCambios + 8;
       }
 
       doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(160);
-      doc.text(`${i+1} / ${conVigente.length}`, pageWidth/2, pageHeight-10, {align:'center'});
+      doc.text(`${i+1} / ${paginas.length}`, pageWidth/2, pageHeight-10, {align:'center'});
     }
 
     doc.save('futbol-jueves-mundial.pdf');
