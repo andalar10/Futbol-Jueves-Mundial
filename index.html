@@ -251,6 +251,14 @@
   <!-- VISTA: ESTADÍSTICAS -->
   <section id="view-stats" class="view">
     <div class="card">
+      <h3 style="margin-top:0; font-size:14px; color:var(--text-dim);">Más partidos jugados</h3>
+      <div id="stats-jugados"></div>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0; font-size:14px; color:var(--text-dim);">Más victorias</h3>
+      <div id="stats-victorias"></div>
+    </div>
+    <div class="card">
       <h3 style="margin-top:0; font-size:14px; color:var(--text-dim);">Bajas por jugador</h3>
       <div id="stats-bajas"></div>
     </div>
@@ -1060,6 +1068,52 @@ function renderStats(){
   } else {
     altasOrdenadas.forEach(([nombre, n])=>{
       altasEl.innerHTML += `<div class="stat-row"><span>${escapeHtml(nombre)}</span><span class="n">${n}</span></div>`;
+    });
+  }
+
+  renderStatsJugadores();
+}
+
+async function renderStatsJugadores(){
+  const jugadosEl = document.getElementById('stats-jugados');
+  const victoriasEl = document.getElementById('stats-victorias');
+
+  if(!supabaseListo()){
+    jugadosEl.innerHTML = '<p style="color:var(--text-dim); font-size:13px;">Sin conexión a la base de datos.</p>';
+    victoriasEl.innerHTML = '';
+    return;
+  }
+
+  jugadosEl.innerHTML = '<p style="color:var(--text-dim); font-size:13px;">Cargando...</p>';
+  victoriasEl.innerHTML = '';
+
+  const { data, error } = await supabaseClient.from('estadisticas_jugadores').select('*');
+  if(error){
+    console.error(error);
+    jugadosEl.innerHTML = '<p style="color:var(--text-dim); font-size:13px;">Error al cargar las estadísticas.</p>';
+    return;
+  }
+
+  if(!data || data.length === 0){
+    jugadosEl.innerHTML = '<p style="color:var(--text-dim); font-size:13px;">Aún no hay partidos con alineación vigente guardados.</p>';
+    victoriasEl.innerHTML = '<p style="color:var(--text-dim); font-size:13px;">Aún no hay resultados registrados.</p>';
+    return;
+  }
+
+  const porJugados = [...data].sort((a,b)=> b.partidos_jugados - a.partidos_jugados);
+  jugadosEl.innerHTML = '';
+  porJugados.forEach(j=>{
+    jugadosEl.innerHTML += `<div class="stat-row"><span>${escapeHtml(j.nombre)}</span><span class="n">${j.partidos_jugados}</span></div>`;
+  });
+
+  const conVictorias = data.filter(j => j.victorias > 0);
+  const porVictorias = [...conVictorias].sort((a,b)=> b.victorias - a.victorias);
+  if(porVictorias.length === 0){
+    victoriasEl.innerHTML = '<p style="color:var(--text-dim); font-size:13px;">Aún no hay resultados registrados.</p>';
+  } else {
+    victoriasEl.innerHTML = '';
+    porVictorias.forEach(j=>{
+      victoriasEl.innerHTML += `<div class="stat-row"><span>${escapeHtml(j.nombre)}</span><span class="n">${j.victorias}</span></div>`;
     });
   }
 }
