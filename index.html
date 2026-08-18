@@ -140,6 +140,10 @@
   .p-head{padding:14px 16px; display:flex; justify-content:space-between; align-items:center; cursor:pointer;}
   .p-head .fecha{font-family:'Oswald'; font-weight:600; font-size:15px; text-transform:uppercase;}
   .p-head .meta{color:var(--text-dim); font-size:12px; margin-top:2px;}
+  .badges{display:flex; gap:6px; margin-top:8px;}
+  .badge{font-size:10.5px; font-weight:700; padding:3px 8px; border-radius:20px; letter-spacing:.02em;}
+  .badge.ok{background:#1d6b3a44; color:#8fd6a3;}
+  .badge.off{background:#2a2a2a; color:#6b7680;}
   .p-head .chev{color:var(--text-dim); transition:transform .2s;}
   .p-body{display:none; padding:0 16px 16px; border-top:1px solid var(--line);}
   .p-body.open{display:block;}
@@ -626,31 +630,50 @@ function renderHistorial(){
     card.className = 'card partido-card';
     const fechaFmt = new Date(p.fecha + 'T00:00:00').toLocaleDateString('es-ES', {weekday:'long', day:'numeric', month:'long'});
     const nVersiones = p.alineaciones.length;
+
+    const tieneTexto = !!(p.convocatoria.texto && p.convocatoria.texto.trim());
+    const tieneImagen = p.alineaciones.some(a => a.imagen_url);
+    const tieneJugadores = p.alineaciones.some(a => a.jugadores && a.jugadores.length);
+
     card.innerHTML = `
       <div class="p-head">
         <div>
           <div class="fecha">${fechaFmt}</div>
           <div class="meta">${nVersiones} versión${nVersiones!==1?'es':''} de alineación</div>
+          <div class="badges">
+            <span class="badge ${tieneTexto?'ok':'off'}">📝 Texto</span>
+            <span class="badge ${tieneImagen?'ok':'off'}">📷 Foto</span>
+            <span class="badge ${tieneJugadores?'ok':'off'}">👥 Jugadores</span>
+          </div>
         </div>
         <span class="chev">▾</span>
       </div>
       <div class="p-body"></div>`;
     const head = card.querySelector('.p-head');
     const body = card.querySelector('.p-body');
-    head.addEventListener('click', ()=>{
+    head.addEventListener('click', (ev)=>{
       body.classList.toggle('open');
       head.querySelector('.chev').style.transform = body.classList.contains('open') ? 'rotate(180deg)' : 'none';
     });
 
-    const convDiv = document.createElement('div');
-    convDiv.className = 'conv-text';
-    convDiv.textContent = p.convocatoria.texto || '(sin texto de convocatoria)';
-    body.appendChild(convDiv);
+    const convWrap = document.createElement('div');
+    body.appendChild(convWrap);
+    pintarConvocatoria(convWrap, p);
 
     [...p.alineaciones].sort((a,b)=>b.version-a.version).forEach(a=>{
       const vDiv = document.createElement('div');
       vDiv.style.marginBottom = '14px';
-      vDiv.innerHTML = `<span class="version-tag ${a.valida?'valid':'invalid'}">v${a.version} ${a.valida?'vigente':'sustituida'}</span>`;
+
+      const cabecera = document.createElement('div');
+      cabecera.style.cssText = 'display:flex; justify-content:space-between; align-items:center;';
+      cabecera.innerHTML = `<span class="version-tag ${a.valida?'valid':'invalid'}">v${a.version} ${a.valida?'vigente':'sustituida'}</span>`;
+      const btnBorrarVersion = document.createElement('button');
+      btnBorrarVersion.className = 'ghost';
+      btnBorrarVersion.style.color = '#e08787';
+      btnBorrarVersion.textContent = '🗑 Eliminar versión';
+      btnBorrarVersion.addEventListener('click', ()=> eliminarVersion(p, a));
+      cabecera.appendChild(btnBorrarVersion);
+      vDiv.appendChild(cabecera);
 
       if(a.imagen_url){
         const img = document.createElement('img');
@@ -677,8 +700,86 @@ function renderHistorial(){
       body.appendChild(vDiv);
     });
 
+    const btnBorrarDia = document.createElement('button');
+    btnBorrarDia.className = 'secondary';
+    btnBorrarDia.style.cssText = 'color:#e08787; border-color:#4a2a2a; margin-top:6px;';
+    btnBorrarDia.textContent = '🗑 Eliminar este día completo';
+    btnBorrarDia.addEventListener('click', ()=> eliminarDia(p));
+    body.appendChild(btnBorrarDia);
+
     wrap.appendChild(card);
   });
+}
+
+function pintarConvocatoria(contenedor, p){
+  contenedor.innerHTML = '';
+  const convDiv = document.createElement('div');
+  convDiv.className = 'conv-text';
+  convDiv.textContent = p.convocatoria.texto || '(sin texto de convocatoria)';
+  contenedor.appendChild(convDiv);
+
+  const btnEditar = document.createElement('button');
+  btnEditar.className = 'ghost';
+  btnEditar.textContent = '✏️ Editar convocatoria';
+  btnEditar.addEventListener('click', ()=>{
+    contenedor.innerHTML = '';
+    const textarea = document.createElement('textarea');
+    textarea.value = p.convocatoria.texto || '';
+    contenedor.appendChild(textarea);
+    const acciones = document.createElement('div');
+    acciones.className = 'version-actions';
+    const btnGuardar = document.createElement('button');
+    btnGuardar.textContent = '💾 Guardar';
+    btnGuardar.addEventListener('click', async ()=>{
+      if(!supabaseListo()) return;
+      btnGuardar.disabled = true; btnGuardar.textContent = 'Guardando...';
+      const { error } = await supabaseClient.from('partidos').update({convocatoria_texto: textarea.value.trim()}).eq('id', p.id);
+      if(error){ console.error(error); toast('Error guardando la convocatoria'); }
+      p.convocatoria.texto = textarea.value.trim();
+      await cargarDesdeSupabase();
+      toast('Convocatoria actualizada ✅');
+      const pFresco = partidos.find(x=>x.id===p.id) || p;
+      pintarConvocatoria(contenedor, pFresco);
+    });
+    const btnCancelar = document.createElement('button');
+    btnCancelar.textContent = '✖ Cancelar';
+    btnCancelar.addEventListener('click', ()=> pintarConvocatoria(contenedor, p));
+    acciones.appendChild(btnGuardar);
+    acciones.appendChild(btnCancelar);
+    contenedor.appendChild(acciones);
+  });
+  contenedor.appendChild(btnEditar);
+}
+
+function extraerPathStorage(url){
+  if(!url) return null;
+  const marcador = '/storage/v1/object/public/alineaciones/';
+  const idx = url.indexOf(marcador);
+  return idx === -1 ? null : url.slice(idx + marcador.length);
+}
+
+async function eliminarVersion(p, a){
+  if(!confirm(`¿Eliminar la versión v${a.version} del ${p.fecha}? Esta acción no se puede deshacer.`)) return;
+  if(!supabaseListo()) return;
+  const ruta = extraerPathStorage(a.imagen_url);
+  if(ruta) await supabaseClient.storage.from('alineaciones').remove([ruta]);
+  const { error } = await supabaseClient.from('alineaciones').delete().eq('id', a.id);
+  if(error){ console.error(error); toast('Error eliminando la versión'); return; }
+  await cargarDesdeSupabase();
+  toast('Versión eliminada');
+  renderHistorial();
+}
+
+async function eliminarDia(p){
+  if(!confirm(`¿Eliminar TODO el partido del ${p.fecha}, incluidas todas sus versiones de alineación? Esta acción no se puede deshacer.`)) return;
+  if(!supabaseListo()) return;
+  const rutas = p.alineaciones.map(a => extraerPathStorage(a.imagen_url)).filter(Boolean);
+  if(rutas.length) await supabaseClient.storage.from('alineaciones').remove(rutas);
+  const { error } = await supabaseClient.from('partidos').delete().eq('id', p.id);
+  if(error){ console.error(error); toast('Error eliminando el partido'); return; }
+  await cargarDesdeSupabase();
+  toast('Día eliminado');
+  renderHistorial();
 }
 
 /* ---------- Estadísticas ---------- */
