@@ -148,6 +148,14 @@
   .version-tag.valid{background:#1d6b3a44; color:#8fd6a3;}
   .version-tag.invalid{background:#3a3a3a; color:var(--text-dim); text-decoration:line-through;}
   .roster-mini{display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;}
+  .version-img{width:100%; max-width:260px; display:block; border-radius:8px; margin:10px 0; border:1px solid var(--line);}
+  .version-actions{display:flex; gap:8px; margin-top:10px;}
+  .version-actions button{
+    flex:1; background:var(--surface-2); border:1px solid var(--line); color:var(--text);
+    border-radius:8px; padding:8px 6px; font-size:12px; font-weight:600; cursor:pointer; font-family:'Inter';
+  }
+  .version-actions button:disabled{opacity:.5; cursor:not-allowed;}
+  .version-status{font-size:12px; color:var(--text-dim); margin-top:8px; display:flex; align-items:center; gap:6px;}
   .chip{font-size:12px; background:var(--surface-2); border:1px solid var(--line); padding:4px 9px; border-radius:20px;}
 
   .empty{text-align:center; color:var(--text-dim); padding:50px 20px; font-size:13.5px;}
@@ -262,7 +270,7 @@ function supabaseListo(){
 /* ---------- Estado (caché local hidratada desde Supabase) ---------- */
 let partidos = []; // se rellena al cargar la página, ver cargarDesdeSupabase()
 let extraccionActual = null; // {equipos:[{nombre,color,jugadores:[{nombre,posicion}]}]}
-let imagenBase64 = null;
+let imagenUrlPendiente = null;
 let cambiosPropuestos = []; // para el diff antes de guardar
 
 async function cargarDesdeSupabase(){
@@ -292,6 +300,7 @@ async function cargarDesdeSupabase(){
         valida: a.valida,
         fecha_mensaje: a.fecha_mensaje,
         imagen_path: a.imagen_path,
+        imagen_url: a.imagen_url,
         jugadores: (a.jugadores_alineacion || []).map(j => ({nombre:j.nombre, posicion:j.posicion, equipo:j.equipo})),
         cambios_respecto_anterior: (a.cambios || []).map(c => ({jugador_baja:c.jugador_baja, jugador_entra:c.jugador_entra}))
       }))
@@ -328,15 +337,36 @@ filebtn.addEventListener('click', ()=> fInput.click());
 fInput.addEventListener('change', async (e)=>{
   const file = e.target.files[0];
   if(!file) return;
-  const resized = await comprimirImagen(file, 900, 0.75);
-  imagenBase64 = resized;
-  document.getElementById('preview').src = 'data:image/jpeg;base64,' + resized;
+
+  document.getElementById('preview').src = URL.createObjectURL(file);
   document.getElementById('preview').style.display = 'block';
   document.getElementById('filebtn-label').textContent = file.name;
-  await extraerAlineacion(resized);
+
+  const statusEl = document.getElementById('status');
+  statusEl.style.display = 'flex';
+  statusEl.innerHTML = '<div class="spinner"></div> Subiendo imagen...';
+
+  try{
+    const blob = await comprimirImagenBlob(file, 900, 0.75);
+    const fecha = document.getElementById('f-fecha').value || 'sin-fecha';
+    const ruta = `${fecha}/${Date.now()}.jpg`;
+    if(!supabaseListo()) throw new Error('Sin conexión a Supabase');
+    const { error: errSubida } = await supabaseClient.storage.from('alineaciones').upload(ruta, blob, {contentType:'image/jpeg', upsert:true});
+    if(errSubida) throw errSubida;
+    const { data: urlData } = supabaseClient.storage.from('alineaciones').getPublicUrl(ruta);
+    imagenUrlPendiente = urlData.publicUrl;
+    await extraerAlineacion({image_url: imagenUrlPendiente});
+  }catch(err){
+    console.error(err);
+    statusEl.innerHTML = '⚠️ No se pudo subir la imagen. Añade los jugadores a mano abajo.';
+    imagenUrlPendiente = null;
+    extraccionActual = {equipos:[{color:'azul', jugadores:[]}, {color:'rojo', jugadores:[]}]};
+    renderRosterEditor(extraccionActual);
+    actualizarBotonGuardar();
+  }
 });
 
-function comprimirImagen(file, maxWidth, calidad){
+function comprimirImagenBlob(file, maxWidth, calidad){
   return new Promise((resolve, reject)=>{
     const reader = new FileReader();
     reader.onload = (ev)=>{
@@ -348,8 +378,7 @@ function comprimirImagen(file, maxWidth, calidad){
         canvas.height = img.height * scale;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        const dataUrl = canvas.toDataURL('image/jpeg', calidad);
-        resolve(dataUrl.split(',')[1]);
+        canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('No se pudo comprimir la imagen')), 'image/jpeg', calidad);
       };
       img.onerror = reject;
       img.src = ev.target.result;
@@ -359,49 +388,25 @@ function comprimirImagen(file, maxWidth, calidad){
   });
 }
 
-async function extraerAlineacion(base64){
+async function llamarExtraccion(payload){
+  if(!supabaseListo()) throw new Error('Sin conexión a Supabase');
+  const { data, error } = await supabaseClient.functions.invoke('extraer-alineacion', { body: payload });
+  if(error) throw error;
+  if(data && data.error) throw new Error(data.error);
+  const textBlock = (data.content || []).find(b => b.type === 'text');
+  if(!textBlock) throw new Error('Sin respuesta de texto');
+  const clean = textBlock.text.replace(/```json|```/g, '').trim();
+  return JSON.parse(clean);
+}
+
+async function extraerAlineacion(payload){
   const statusEl = document.getElementById('status');
   statusEl.style.display = 'flex';
   statusEl.innerHTML = '<div class="spinner"></div> Leyendo la alineación de la imagen...';
   document.getElementById('roster-editor').style.display = 'none';
 
-  const prompt = `Esta imagen es una alineación de fútbol generada con un "squad builder": dos equipos enfrentados en un campo vertical, cada jugador representado por una camiseta de color con su nombre encima. Un equipo ataca hacia arriba (portero arriba) y el otro hacia abajo (portero abajo).
-
-Devuelve EXCLUSIVAMENTE un JSON válido (sin texto adicional, sin markdown, sin backticks) con esta forma exacta:
-{
-  "equipos": [
-    {
-      "color": "azul" | "rojo" | otro color de camiseta que veas,
-      "jugadores": [
-        {"nombre": "nombre exacto tal cual aparece, incluye apodos o símbolos como ⚡ si están junto al nombre", "posicion": "portero" | "defensa" | "medio" | "delantero"}
-      ]
-    }
-  ]
-}
-
-Incluye TODOS los jugadores visibles de ambos equipos, en el orden en que aparecen de arriba a abajo. Infiere la posición por su fila en el campo (portero en la portería, defensas en la línea siguiente, medios en el centro, delantero cerca del centro del campo).`;
-
   try{
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: 1000,
-        messages: [{
-          role: "user",
-          content: [
-            {type:"image", source:{type:"base64", media_type:"image/jpeg", data: base64}},
-            {type:"text", text: prompt}
-          ]
-        }]
-      })
-    });
-    const data = await response.json();
-    const textBlock = (data.content || []).find(b => b.type === 'text');
-    if(!textBlock) throw new Error('Sin respuesta de texto');
-    const clean = textBlock.text.replace(/```json|```/g, '').trim();
-    const parsed = JSON.parse(clean);
+    const parsed = await llamarExtraccion(payload);
     extraccionActual = parsed;
     statusEl.innerHTML = '✅ Alineación leída. Revisa y corrige si hace falta.';
     renderRosterEditor(parsed);
@@ -566,7 +571,7 @@ document.getElementById('btn-guardar').addEventListener('click', async ()=>{
     version: nuevaVersion,
     valida: true,
     fecha_mensaje: new Date().toISOString(),
-    imagen_path: imagenBase64 ? `${alineacionId}.jpg` : null
+    imagen_url: imagenUrlPendiente
   });
 
   if(errAlineacion){ console.error(errAlineacion); toast('Error guardando la alineación'); btnGuardar.disabled = false; btnGuardar.textContent = 'Guardar partido'; return; }
@@ -594,7 +599,7 @@ document.getElementById('btn-guardar').addEventListener('click', async ()=>{
 
 function resetFormulario(){
   extraccionActual = null;
-  imagenBase64 = null;
+  imagenUrlPendiente = null;
   cambiosPropuestos = [];
   document.getElementById('f-convocatoria').value = '';
   document.getElementById('f-imagen').value = '';
@@ -646,6 +651,15 @@ function renderHistorial(){
       const vDiv = document.createElement('div');
       vDiv.style.marginBottom = '14px';
       vDiv.innerHTML = `<span class="version-tag ${a.valida?'valid':'invalid'}">v${a.version} ${a.valida?'vigente':'sustituida'}</span>`;
+
+      if(a.imagen_url){
+        const img = document.createElement('img');
+        img.className = 'version-img';
+        img.src = a.imagen_url;
+        img.alt = `Alineación v${a.version}`;
+        vDiv.appendChild(img);
+      }
+
       if(a.cambios_respecto_anterior && a.cambios_respecto_anterior.length){
         const diffBox = document.createElement('div');
         diffBox.className = 'diff-box';
@@ -655,15 +669,11 @@ function renderHistorial(){
         });
         vDiv.appendChild(diffBox);
       }
-      const chips = document.createElement('div');
-      chips.className = 'roster-mini';
-      a.jugadores.forEach(j=>{
-        const c = document.createElement('span');
-        c.className = 'chip';
-        c.textContent = j.nombre;
-        chips.appendChild(c);
-      });
-      vDiv.appendChild(chips);
+
+      const zonaJugadores = document.createElement('div');
+      vDiv.appendChild(zonaJugadores);
+      pintarJugadoresVersion(zonaJugadores, a);
+
       body.appendChild(vDiv);
     });
 
@@ -672,6 +682,152 @@ function renderHistorial(){
 }
 
 /* ---------- Estadísticas ---------- */
+/* ---------- Edición y reprocesado de una versión del historial ---------- */
+function agruparPorEquipo(jugadores){
+  const mapa = new Map();
+  (jugadores||[]).forEach(j=>{
+    const key = j.equipo || 'otro';
+    if(!mapa.has(key)) mapa.set(key, []);
+    mapa.get(key).push({nombre:j.nombre, posicion:j.posicion});
+  });
+  if(mapa.size === 0){ mapa.set('azul', []); mapa.set('rojo', []); }
+  return {equipos: [...mapa.entries()].map(([color, jugadores])=>({color, jugadores}))};
+}
+
+function pintarJugadoresVersion(contenedor, alineacion){
+  contenedor.innerHTML = '';
+
+  const chips = document.createElement('div');
+  chips.className = 'roster-mini';
+  alineacion.jugadores.forEach(j=>{
+    const c = document.createElement('span');
+    c.className = 'chip';
+    c.textContent = j.nombre;
+    chips.appendChild(c);
+  });
+  contenedor.appendChild(chips);
+
+  const acciones = document.createElement('div');
+  acciones.className = 'version-actions';
+  const btnEditar = document.createElement('button');
+  btnEditar.type = 'button';
+  btnEditar.textContent = '✏️ Editar jugadores';
+  acciones.appendChild(btnEditar);
+  if(alineacion.imagen_url){
+    const btnReprocesar = document.createElement('button');
+    btnReprocesar.type = 'button';
+    btnReprocesar.textContent = '🔄 Reprocesar con IA';
+    btnReprocesar.addEventListener('click', ()=> reprocesarVersion(contenedor, alineacion, btnReprocesar));
+    acciones.appendChild(btnReprocesar);
+  }
+  contenedor.appendChild(acciones);
+
+  btnEditar.addEventListener('click', ()=> entrarModoEdicion(contenedor, alineacion, agruparPorEquipo(alineacion.jugadores)));
+}
+
+function entrarModoEdicion(contenedor, alineacion, data){
+  contenedor.innerHTML = '';
+  const editor = document.createElement('div');
+  editor.className = 'roster';
+  contenedor.appendChild(editor);
+  crearEditorEquiposHistorial(data, editor);
+
+  const acciones = document.createElement('div');
+  acciones.className = 'version-actions';
+  const btnGuardar = document.createElement('button');
+  btnGuardar.type = 'button';
+  btnGuardar.textContent = '💾 Guardar cambios';
+  btnGuardar.addEventListener('click', ()=> guardarJugadoresVersion(contenedor, alineacion, data, btnGuardar));
+  const btnCancelar = document.createElement('button');
+  btnCancelar.type = 'button';
+  btnCancelar.textContent = '✖ Cancelar';
+  btnCancelar.addEventListener('click', ()=> pintarJugadoresVersion(contenedor, alineacion));
+  acciones.appendChild(btnGuardar);
+  acciones.appendChild(btnCancelar);
+  contenedor.appendChild(acciones);
+}
+
+function crearEditorEquiposHistorial(data, contenedor){
+  contenedor.innerHTML = '';
+  data.equipos.forEach(equipo=>{
+    const block = document.createElement('div');
+    block.className = 'team-block';
+    const dotClass = equipo.color === 'azul' ? 'blue' : (equipo.color === 'rojo' ? 'red' : 'other');
+    block.innerHTML = `<div class="team-head"><span class="dot ${dotClass}"></span><span>Equipo ${escapeHtml(equipo.color||'')}</span></div>
+      <div class="prows"></div>
+      <button class="ghost" type="button">+ Añadir jugador</button>`;
+    contenedor.appendChild(block);
+    const rowsWrap = block.querySelector('.prows');
+    equipo.jugadores.forEach((j, ji)=>{
+      const row = document.createElement('div');
+      row.className = 'prow';
+      row.innerHTML = `
+        <input type="text" value="${escapeHtml(j.nombre)}" placeholder="Nombre">
+        <select>
+          <option value="portero" ${j.posicion==='portero'?'selected':''}>Portero</option>
+          <option value="defensa" ${j.posicion==='defensa'?'selected':''}>Defensa</option>
+          <option value="medio" ${j.posicion==='medio'?'selected':''}>Medio</option>
+          <option value="delantero" ${j.posicion==='delantero'?'selected':''}>Delantero</option>
+        </select>
+        <button type="button" title="Quitar">✕</button>`;
+      const [inputEl, selectEl, btnEl] = row.children;
+      inputEl.addEventListener('input', ()=> j.nombre = inputEl.value);
+      selectEl.addEventListener('change', ()=> j.posicion = selectEl.value);
+      btnEl.addEventListener('click', ()=>{
+        equipo.jugadores.splice(ji, 1);
+        crearEditorEquiposHistorial(data, contenedor);
+      });
+      rowsWrap.appendChild(row);
+    });
+    block.querySelector('button.ghost').addEventListener('click', ()=>{
+      equipo.jugadores.push({nombre:'', posicion:'medio'});
+      crearEditorEquiposHistorial(data, contenedor);
+    });
+  });
+}
+
+async function guardarJugadoresVersion(contenedor, alineacion, data, btnGuardar){
+  if(!supabaseListo()) return;
+  btnGuardar.disabled = true;
+  btnGuardar.textContent = 'Guardando...';
+
+  const jugadoresPlano = data.equipos.flatMap(e =>
+    e.jugadores.filter(j=>j.nombre.trim()).map(j => ({nombre:j.nombre.trim(), posicion:j.posicion, equipo:e.color}))
+  );
+
+  await supabaseClient.from('jugadores_alineacion').delete().eq('alineacion_id', alineacion.id);
+  if(jugadoresPlano.length){
+    const { error } = await supabaseClient.from('jugadores_alineacion').insert(
+      jugadoresPlano.map(j => ({alineacion_id: alineacion.id, nombre: j.nombre, posicion: j.posicion, equipo: j.equipo}))
+    );
+    if(error){ console.error(error); toast('Error guardando los cambios'); btnGuardar.disabled = false; btnGuardar.textContent = '💾 Guardar cambios'; return; }
+  }
+
+  alineacion.jugadores = jugadoresPlano;
+  await cargarDesdeSupabase();
+  toast('Jugadores actualizados ✅');
+  pintarJugadoresVersion(contenedor, alineacion);
+}
+
+async function reprocesarVersion(contenedor, alineacion, btnReprocesar){
+  btnReprocesar.disabled = true;
+  btnReprocesar.textContent = 'Leyendo imagen...';
+  const status = document.createElement('div');
+  status.className = 'version-status';
+  status.innerHTML = '<div class="spinner"></div> Consultando a la IA...';
+  contenedor.appendChild(status);
+
+  try{
+    const parsed = await llamarExtraccion({image_url: alineacion.imagen_url});
+    toast('Nueva lectura lista, revisa antes de guardar');
+    entrarModoEdicion(contenedor, alineacion, parsed);
+  }catch(err){
+    console.error(err);
+    toast('No se pudo reprocesar la imagen');
+    pintarJugadoresVersion(contenedor, alineacion);
+  }
+}
+
 function renderStats(){
   const bajasCount = {};
   const altasCount = {};
