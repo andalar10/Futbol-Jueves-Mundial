@@ -243,16 +243,16 @@ const SUPABASE_URL = 'https://qqmxxpbwvfalynltnpun.supabase.co';
 // Clave "anon"/publishable: está pensada para ir en el cliente, no es secreta.
 // El acceso real lo controlan las políticas RLS del proyecto.
 const SUPABASE_ANON_KEY = 'sb_publishable_EunJ0PMxSQMuScN5W5OXGA_1-MCKn__';
-let supabase = null;
+let supabaseClient = null;
 try{
   if(!window.supabase) throw new Error('La librería de Supabase no se cargó (¿sin conexión a internet?)');
-  supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 }catch(err){
   console.error('No se pudo inicializar Supabase:', err);
 }
 
 function supabaseListo(){
-  if(!supabase){
+  if(!supabaseClient){
     toast('⚠️ Sin conexión a la base de datos');
     return false;
   }
@@ -267,7 +267,7 @@ let cambiosPropuestos = []; // para el diff antes de guardar
 
 async function cargarDesdeSupabase(){
   if(!supabaseListo()) return;
-  const { data, error } = await supabase
+  const { data, error } = await supabaseClient
     .from('partidos')
     .select('*, alineaciones(*, jugadores_alineacion(*), cambios(*))')
     .order('fecha', { ascending: false });
@@ -543,7 +543,7 @@ document.getElementById('btn-guardar').addEventListener('click', async ()=>{
 
   const partidoExistente = partidos.find(p => p.fecha === fecha);
 
-  const { error: errPartido } = await supabase.from('partidos').upsert({
+  const { error: errPartido } = await supabaseClient.from('partidos').upsert({
     id: fecha,
     fecha: fecha,
     convocatoria_texto: textoConv || (partidoExistente ? partidoExistente.convocatoria.texto : ''),
@@ -560,7 +560,7 @@ document.getElementById('btn-guardar').addEventListener('click', async ()=>{
 
   // La tabla "alineaciones" tiene un trigger que invalida automáticamente
   // la versión anterior vigente del mismo partido al insertar esta.
-  const { error: errAlineacion } = await supabase.from('alineaciones').insert({
+  const { error: errAlineacion } = await supabaseClient.from('alineaciones').insert({
     id: alineacionId,
     partido_id: fecha,
     version: nuevaVersion,
@@ -572,14 +572,14 @@ document.getElementById('btn-guardar').addEventListener('click', async ()=>{
   if(errAlineacion){ console.error(errAlineacion); toast('Error guardando la alineación'); btnGuardar.disabled = false; btnGuardar.textContent = 'Guardar partido'; return; }
 
   if(jugadoresPlano.length){
-    const { error: errJug } = await supabase.from('jugadores_alineacion').insert(
+    const { error: errJug } = await supabaseClient.from('jugadores_alineacion').insert(
       jugadoresPlano.map(j => ({alineacion_id: alineacionId, nombre: j.nombre, posicion: j.posicion, equipo: j.equipo}))
     );
     if(errJug) console.error(errJug);
   }
 
   if(cambiosPropuestos.length){
-    const { error: errCambios } = await supabase.from('cambios').insert(
+    const { error: errCambios } = await supabaseClient.from('cambios').insert(
       cambiosPropuestos.map(c => ({alineacion_id: alineacionId, jugador_baja: c.jugador_baja, jugador_entra: c.jugador_entra}))
     );
     if(errCambios) console.error(errCambios);
@@ -737,7 +737,7 @@ document.getElementById('f-import').addEventListener('change', async (e)=>{
       const p = importados[i];
       btnImport.textContent = `Importando ${i+1}/${importados.length}...`;
 
-      await supabase.from('partidos').upsert({
+      await supabaseClient.from('partidos').upsert({
         id: p.fecha,
         fecha: p.fecha,
         convocatoria_texto: p.convocatoria?.texto || '',
@@ -747,7 +747,7 @@ document.getElementById('f-import').addEventListener('change', async (e)=>{
 
       for(const a of (p.alineaciones || [])){
         const alineacionId = a.id || `${p.fecha}-v${a.version}`;
-        await supabase.from('alineaciones').upsert({
+        await supabaseClient.from('alineaciones').upsert({
           id: alineacionId,
           partido_id: p.fecha,
           version: a.version,
@@ -757,16 +757,16 @@ document.getElementById('f-import').addEventListener('change', async (e)=>{
         }, { onConflict: 'id' });
 
         // idempotente: si se reimporta el mismo fichero, no se duplican jugadores/cambios
-        await supabase.from('jugadores_alineacion').delete().eq('alineacion_id', alineacionId);
+        await supabaseClient.from('jugadores_alineacion').delete().eq('alineacion_id', alineacionId);
         if((a.jugadores || []).length){
-          await supabase.from('jugadores_alineacion').insert(
+          await supabaseClient.from('jugadores_alineacion').insert(
             a.jugadores.map(j => ({alineacion_id: alineacionId, nombre: j.nombre, posicion: j.posicion || '', equipo: j.equipo || ''}))
           );
         }
 
-        await supabase.from('cambios').delete().eq('alineacion_id', alineacionId);
+        await supabaseClient.from('cambios').delete().eq('alineacion_id', alineacionId);
         if((a.cambios_respecto_anterior || []).length){
-          await supabase.from('cambios').insert(
+          await supabaseClient.from('cambios').insert(
             a.cambios_respecto_anterior.map(c => ({alineacion_id: alineacionId, jugador_baja: c.jugador_baja, jugador_entra: c.jugador_entra}))
           );
         }
