@@ -144,6 +144,17 @@
   .badge{font-size:10.5px; font-weight:700; padding:3px 8px; border-radius:20px; letter-spacing:.02em;}
   .badge.ok{background:#1d6b3a44; color:#8fd6a3;}
   .badge.off{background:#2a2a2a; color:#6b7680;}
+
+  .marcador-input{display:flex; align-items:center; gap:10px; margin-top:6px;}
+  .marcador-input input{
+    width:56px; text-align:center; background:var(--surface-2); border:1px solid var(--line); color:var(--text);
+    border-radius:10px; padding:11px 6px; font-family:'Oswald'; font-size:18px; font-weight:600;
+  }
+  .marcador-guion{color:var(--text-dim); font-family:'Oswald'; font-size:18px;}
+  .marcador-chip{
+    display:inline-flex; align-items:center; gap:7px; background:var(--surface-2); border:1px solid var(--line);
+    border-radius:20px; padding:4px 12px; font-family:'Oswald'; font-size:13px; font-weight:600; margin-top:8px;
+  }
   .p-head .chev{color:var(--text-dim); transition:transform .2s;}
   .p-body{display:none; padding:0 16px 16px; border-top:1px solid var(--line);}
   .p-body.open{display:block;}
@@ -207,6 +218,15 @@
       </div>
       <img id="preview" class="preview-img">
 
+      <label>Resultado (opcional, puedes rellenarlo más tarde)</label>
+      <div class="marcador-input">
+        <span class="dot blue"></span>
+        <input type="number" id="f-goles-azul" min="0" placeholder="–">
+        <span class="marcador-guion">–</span>
+        <input type="number" id="f-goles-rojo" min="0" placeholder="–">
+        <span class="dot red"></span>
+      </div>
+
       <div id="status" class="status" style="display:none;"></div>
 
       <div id="roster-editor" class="roster" style="display:none;"></div>
@@ -218,11 +238,13 @@
 
   <!-- VISTA: HISTORIAL -->
   <section id="view-historial" class="view">
-    <div class="toolbar" style="margin-bottom:14px;">
+    <div class="toolbar" style="margin-bottom:8px;">
       <button class="secondary" id="btn-export">⬇ Exportar JSON</button>
       <button class="secondary" id="btn-import">⬆ Importar JSON</button>
       <input type="file" id="f-import" accept="application/json" style="display:none;">
     </div>
+    <button class="secondary" id="btn-generar-libro" style="margin-bottom:14px;">📖 Generar libro (PDF)</button>
+    <div id="status-libro" class="status" style="display:none;"></div>
     <div id="historial-list"></div>
   </section>
 
@@ -249,6 +271,7 @@
 <div class="toast" id="toast"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script>
 /* ---------- Conexión a Supabase ---------- */
 const SUPABASE_URL = 'https://qqmxxpbwvfalynltnpun.supabase.co';
@@ -295,6 +318,10 @@ async function cargarDesdeSupabase(){
       texto: p.convocatoria_texto || '',
       fecha_mensaje: p.convocatoria_fecha_mensaje,
       es_borrador: p.es_borrador
+    },
+    resultado: {
+      golesAzul: p.goles_azul !== undefined ? p.goles_azul : null,
+      golesRojo: p.goles_rojo !== undefined ? p.goles_rojo : null
     },
     alineaciones: (p.alineaciones || [])
       .sort((a,b)=>a.version-b.version)
@@ -552,12 +579,19 @@ document.getElementById('btn-guardar').addEventListener('click', async ()=>{
 
   const partidoExistente = partidos.find(p => p.fecha === fecha);
 
+  const valGolesAzul = document.getElementById('f-goles-azul').value;
+  const valGolesRojo = document.getElementById('f-goles-rojo').value;
+  const golesAzul = valGolesAzul !== '' ? parseInt(valGolesAzul, 10) : (partidoExistente ? partidoExistente.resultado.golesAzul : null);
+  const golesRojo = valGolesRojo !== '' ? parseInt(valGolesRojo, 10) : (partidoExistente ? partidoExistente.resultado.golesRojo : null);
+
   const { error: errPartido } = await supabaseClient.from('partidos').upsert({
     id: fecha,
     fecha: fecha,
     convocatoria_texto: textoConv || (partidoExistente ? partidoExistente.convocatoria.texto : ''),
     convocatoria_fecha_mensaje: new Date().toISOString(),
-    es_borrador: true
+    es_borrador: true,
+    goles_azul: golesAzul,
+    goles_rojo: golesRojo
   }, { onConflict: 'id' });
 
   if(errPartido){ console.error(errPartido); toast('Error guardando el partido'); btnGuardar.disabled = false; btnGuardar.textContent = 'Guardar partido'; return; }
@@ -606,6 +640,8 @@ function resetFormulario(){
   imagenUrlPendiente = null;
   cambiosPropuestos = [];
   document.getElementById('f-convocatoria').value = '';
+  document.getElementById('f-goles-azul').value = '';
+  document.getElementById('f-goles-rojo').value = '';
   document.getElementById('f-imagen').value = '';
   document.getElementById('preview').style.display = 'none';
   document.getElementById('filebtn-label').textContent = 'Toca para subir la captura';
@@ -634,6 +670,7 @@ function renderHistorial(){
     const tieneTexto = !!(p.convocatoria.texto && p.convocatoria.texto.trim());
     const tieneImagen = p.alineaciones.some(a => a.imagen_url);
     const tieneJugadores = p.alineaciones.some(a => a.jugadores && a.jugadores.length);
+    const tieneResultado = p.resultado.golesAzul !== null && p.resultado.golesRojo !== null;
 
     card.innerHTML = `
       <div class="p-head">
@@ -644,7 +681,9 @@ function renderHistorial(){
             <span class="badge ${tieneTexto?'ok':'off'}">📝 Texto</span>
             <span class="badge ${tieneImagen?'ok':'off'}">📷 Foto</span>
             <span class="badge ${tieneJugadores?'ok':'off'}">👥 Jugadores</span>
+            <span class="badge ${tieneResultado?'ok':'off'}">⚽ Resultado</span>
           </div>
+          ${tieneResultado ? `<div class="marcador-chip"><span class="dot blue"></span>${p.resultado.golesAzul} – ${p.resultado.golesRojo}<span class="dot red"></span></div>` : ''}
         </div>
         <span class="chev">▾</span>
       </div>
@@ -655,6 +694,10 @@ function renderHistorial(){
       body.classList.toggle('open');
       head.querySelector('.chev').style.transform = body.classList.contains('open') ? 'rotate(180deg)' : 'none';
     });
+
+    const resultWrap = document.createElement('div');
+    body.appendChild(resultWrap);
+    pintarResultado(resultWrap, p);
 
     const convWrap = document.createElement('div');
     body.appendChild(convWrap);
@@ -709,6 +752,61 @@ function renderHistorial(){
 
     wrap.appendChild(card);
   });
+}
+
+function pintarResultado(contenedor, p){
+  contenedor.innerHTML = '';
+  const tieneResultado = p.resultado.golesAzul !== null && p.resultado.golesRojo !== null;
+
+  const linea = document.createElement('div');
+  linea.style.cssText = 'display:flex; align-items:center; gap:10px; margin-bottom:6px;';
+  linea.innerHTML = tieneResultado
+    ? `<div class="marcador-chip"><span class="dot blue"></span>${p.resultado.golesAzul} – ${p.resultado.golesRojo}<span class="dot red"></span></div>`
+    : `<span style="color:var(--text-dim); font-size:13px;">Sin resultado todavía</span>`;
+  contenedor.appendChild(linea);
+
+  const btnEditar = document.createElement('button');
+  btnEditar.className = 'ghost';
+  btnEditar.textContent = tieneResultado ? '✏️ Editar resultado' : '➕ Añadir resultado';
+  btnEditar.addEventListener('click', ()=>{
+    contenedor.innerHTML = '';
+    const fila = document.createElement('div');
+    fila.className = 'marcador-input';
+    fila.innerHTML = `
+      <span class="dot blue"></span>
+      <input type="number" min="0" value="${p.resultado.golesAzul ?? ''}">
+      <span class="marcador-guion">–</span>
+      <input type="number" min="0" value="${p.resultado.golesRojo ?? ''}">
+      <span class="dot red"></span>`;
+    contenedor.appendChild(fila);
+    const inputs = fila.querySelectorAll('input');
+
+    const acciones = document.createElement('div');
+    acciones.className = 'version-actions';
+    const btnGuardar = document.createElement('button');
+    btnGuardar.textContent = '💾 Guardar';
+    btnGuardar.addEventListener('click', async ()=>{
+      if(!supabaseListo()) return;
+      btnGuardar.disabled = true; btnGuardar.textContent = 'Guardando...';
+      const golesAzul = inputs[0].value !== '' ? parseInt(inputs[0].value, 10) : null;
+      const golesRojo = inputs[1].value !== '' ? parseInt(inputs[1].value, 10) : null;
+      const { error } = await supabaseClient.from('partidos').update({goles_azul: golesAzul, goles_rojo: golesRojo}).eq('id', p.id);
+      if(error){ console.error(error); toast('Error guardando el resultado'); }
+      p.resultado.golesAzul = golesAzul;
+      p.resultado.golesRojo = golesRojo;
+      await cargarDesdeSupabase();
+      toast('Resultado actualizado ✅');
+      const pFresco = partidos.find(x=>x.id===p.id) || p;
+      pintarResultado(contenedor, pFresco);
+    });
+    const btnCancelar = document.createElement('button');
+    btnCancelar.textContent = '✖ Cancelar';
+    btnCancelar.addEventListener('click', ()=> pintarResultado(contenedor, p));
+    acciones.appendChild(btnGuardar);
+    acciones.appendChild(btnCancelar);
+    contenedor.appendChild(acciones);
+  });
+  contenedor.appendChild(btnEditar);
 }
 
 function pintarConvocatoria(contenedor, p){
@@ -966,6 +1064,139 @@ function renderStats(){
   }
 }
 
+/* ---------- Generar libro en PDF (un partido por página) ---------- */
+function urlAImagenBase64(url){
+  return fetch(url)
+    .then(res => { if(!res.ok) throw new Error('No se pudo descargar la imagen'); return res.blob(); })
+    .then(blob => new Promise((resolve, reject)=>{
+      const reader = new FileReader();
+      reader.onload = ()=> resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    }));
+}
+
+function medirImagen(dataUrl){
+  return new Promise((resolve, reject)=>{
+    const img = new Image();
+    img.onload = ()=> resolve({width:img.width, height:img.height});
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+}
+
+async function generarLibroPDF(){
+  const btn = document.getElementById('btn-generar-libro');
+  const statusLibro = document.getElementById('status-libro');
+  if(!window.jspdf){ toast('No se pudo cargar la librería de PDF'); return; }
+
+  btn.disabled = true;
+  statusLibro.style.display = 'flex';
+  statusLibro.innerHTML = '<div class="spinner"></div> Generando el libro...';
+
+  try{
+    await cargarDesdeSupabase();
+
+    const ordenados = [...partidos].sort((a,b)=> a.fecha < b.fecha ? -1 : 1); // más antiguo primero
+    const conVigente = ordenados
+      .map(p => ({ p, vigente: p.alineaciones.find(a=>a.valida) }))
+      .filter(x => x.vigente);
+
+    if(conVigente.length === 0){
+      toast('No hay partidos con alineación vigente para incluir en el libro');
+      return;
+    }
+
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 18;
+
+    for(let i=0; i<conVigente.length; i++){
+      const { p, vigente } = conVigente[i];
+      if(i > 0) doc.addPage();
+      let y = margin;
+
+      statusLibro.innerHTML = `<div class="spinner"></div> Preparando página ${i+1}/${conVigente.length}...`;
+
+      doc.setFont('helvetica','bold'); doc.setFontSize(9); doc.setTextColor(130);
+      doc.text('FÚTBOL JUEVES MUNDIAL', margin, y);
+      y += 8;
+
+      const fechaFmt = new Date(p.fecha + 'T00:00:00').toLocaleDateString('es-ES', {weekday:'long', day:'numeric', month:'long', year:'numeric'});
+      const fechaCap = fechaFmt.charAt(0).toUpperCase() + fechaFmt.slice(1);
+      doc.setFont('helvetica','bold'); doc.setFontSize(17); doc.setTextColor(20);
+      doc.text(fechaCap, margin, y);
+      y += 9;
+
+      if(p.resultado.golesAzul !== null && p.resultado.golesRojo !== null){
+        doc.setFillColor(53,104,196);
+        doc.circle(margin+1.5, y-1.7, 1.8, 'F');
+        doc.setFont('helvetica','bold'); doc.setFontSize(13); doc.setTextColor(20);
+        const texto = `${p.resultado.golesAzul}  –  ${p.resultado.golesRojo}`;
+        doc.text(texto, margin+6, y);
+        const ancho = doc.getTextWidth(texto);
+        doc.setFillColor(194,59,59);
+        doc.circle(margin+6+ancho+3.5, y-1.7, 1.8, 'F');
+        y += 10;
+      }
+
+      if(p.convocatoria.texto){
+        doc.setFont('helvetica','italic'); doc.setFontSize(10); doc.setTextColor(90);
+        const lineas = doc.splitTextToSize(p.convocatoria.texto, pageWidth - margin*2);
+        doc.text(lineas, margin, y);
+        y += lineas.length * 4.8 + 6;
+      }
+
+      if(vigente.imagen_url){
+        try{
+          const dataUrl = await urlAImagenBase64(vigente.imagen_url);
+          const dims = await medirImagen(dataUrl);
+          const espacioCambios = (vigente.cambios_respecto_anterior||[]).length ? 12 + vigente.cambios_respecto_anterior.length * 5.5 : 0;
+          const maxW = pageWidth - margin*2;
+          const maxH = pageHeight - y - 18 - espacioCambios;
+          let w = maxW, h = w * (dims.height/dims.width);
+          if(h > maxH){ h = maxH; w = h * (dims.width/dims.height); }
+          const x = margin + (maxW - w)/2;
+          doc.addImage(dataUrl, 'JPEG', x, y, w, h);
+          y += h + 8;
+        }catch(err){
+          console.error('No se pudo insertar la imagen en el PDF', err);
+          doc.setFont('helvetica','italic'); doc.setFontSize(9); doc.setTextColor(150);
+          doc.text('(No se pudo cargar la imagen de esta alineación)', margin, y);
+          y += 8;
+        }
+      }
+
+      if(vigente.cambios_respecto_anterior && vigente.cambios_respecto_anterior.length){
+        doc.setFont('helvetica','bold'); doc.setFontSize(10); doc.setTextColor(180,130,40);
+        doc.text('Bajas y cambios de esta jornada', margin, y);
+        y += 6;
+        doc.setFont('helvetica','normal'); doc.setFontSize(9.5); doc.setTextColor(50);
+        vigente.cambios_respecto_anterior.forEach(c=>{
+          doc.text(`${c.jugador_baja}  ->  ${c.jugador_entra || '(sin sustituto)'}`, margin, y);
+          y += 5.3;
+        });
+      }
+
+      doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(160);
+      doc.text(`${i+1} / ${conVigente.length}`, pageWidth/2, pageHeight-10, {align:'center'});
+    }
+
+    doc.save('futbol-jueves-mundial.pdf');
+    toast('Libro generado ✅');
+  }catch(err){
+    console.error(err);
+    toast('Error generando el libro');
+  }finally{
+    btn.disabled = false;
+    statusLibro.style.display = 'none';
+  }
+}
+
+document.getElementById('btn-generar-libro').addEventListener('click', generarLibroPDF);
+
 /* ---------- Importar / exportar JSON (para la carga histórica) ---------- */
 document.getElementById('btn-export').addEventListener('click', ()=>{
   const blob = new Blob([JSON.stringify(partidos, null, 2)], {type:'application/json'});
@@ -999,7 +1230,9 @@ document.getElementById('f-import').addEventListener('change', async (e)=>{
         fecha: p.fecha,
         convocatoria_texto: p.convocatoria?.texto || '',
         convocatoria_fecha_mensaje: p.convocatoria?.fecha_mensaje || new Date().toISOString(),
-        es_borrador: true
+        es_borrador: true,
+        goles_azul: p.resultado?.golesAzul ?? null,
+        goles_rojo: p.resultado?.golesRojo ?? null
       }, { onConflict: 'id' });
 
       for(const a of (p.alineaciones || [])){
