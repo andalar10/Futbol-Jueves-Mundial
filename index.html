@@ -1471,6 +1471,116 @@ function medirImagen(dataUrl){
   });
 }
 
+/* ---------- Generar libro en PDF (un partido por página) ---------- */
+/* La fuente estándar (Helvetica) de jsPDF no tiene glyphs para emoji: si se
+   le pasan tal cual como texto, se pintan como caracteres sueltos de otra
+   codificación (ej. "🍻" -> "Ø<ß") y además splitTextToSize calcula mal el
+   ancho de línea con esos caracteres, dejando el texto mal ajustado.
+   Solución: detectar los emoji, dibujarlos como pequeñas imágenes PNG usando
+   el emoji a color del propio navegador (vía canvas) e insertarlos en el PDF
+   en el punto exacto del texto; el resto sigue siendo texto vectorial normal. */
+
+const EMOJI_REGEX = /(\p{Extended_Pictographic}(?:\uFE0F)?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F)?)*|[\u{1F1E6}-\u{1F1FF}]{2})/gu;
+
+// Divide un texto en segmentos alternos {tipo:'texto'|'emoji', valor}
+function segmentarTextoConEmoji(texto){
+  const segmentos = [];
+  let ultimo = 0, m;
+  EMOJI_REGEX.lastIndex = 0;
+  while((m = EMOJI_REGEX.exec(texto))){
+    if(m.index > ultimo) segmentos.push({tipo:'texto', valor: texto.slice(ultimo, m.index)});
+    segmentos.push({tipo:'emoji', valor: m[0]});
+    ultimo = m.index + m[0].length;
+  }
+  if(ultimo < texto.length) segmentos.push({tipo:'texto', valor: texto.slice(ultimo)});
+  return segmentos;
+}
+
+// Cachea el PNG de cada emoji (por emoji + tamaño) para no redibujarlo en canvas cada vez
+const cacheImagenesEmoji = new Map();
+function emojiAPngDataUrl(emoji, tamanoPt){
+  const clave = emoji + '|' + tamanoPt;
+  if(cacheImagenesEmoji.has(clave)) return cacheImagenesEmoji.get(clave);
+  const escala = 6; // supermuestreo para que se vea nítido al escalarlo dentro del PDF
+  const pxCanvas = Math.round(tamanoPt * escala);
+  const canvas = document.createElement('canvas');
+  canvas.width = pxCanvas;
+  canvas.height = pxCanvas;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, pxCanvas, pxCanvas);
+  ctx.font = `${Math.round(pxCanvas*0.82)}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(emoji, pxCanvas/2, pxCanvas/2 + pxCanvas*0.04);
+  const dataUrl = canvas.toDataURL('image/png');
+  cacheImagenesEmoji.set(clave, dataUrl);
+  return dataUrl;
+}
+
+// Dibuja texto+emoji en una sola línea (sin salto de línea), usando la fuente/tamaño/color
+// ya configurados en doc. Devuelve el ancho total en mm ocupado.
+function dibujarLineaConEmoji(doc, texto, x, y, tamanoPt){
+  const anchoEmojiMm = tamanoPt * 0.3528; // aprox. cuadrado, mismo tamaño que la altura de fuente
+  let xCursor = x;
+  segmentarTextoConEmoji(texto).forEach(seg=>{
+    if(seg.tipo === 'emoji'){
+      const dataUrl = emojiAPngDataUrl(seg.valor, tamanoPt);
+      doc.addImage(dataUrl, 'PNG', xCursor, y - anchoEmojiMm*0.78, anchoEmojiMm, anchoEmojiMm);
+      xCursor += anchoEmojiMm;
+    } else if(seg.valor){
+      doc.text(seg.valor, xCursor, y);
+      xCursor += doc.getTextWidth(seg.valor);
+    }
+  });
+  return xCursor - x;
+}
+
+// Dibuja un párrafo con salto de línea automático (como splitTextToSize + text, pero
+// con emoji insertados como imágenes en el lugar correcto). Devuelve la nueva y tras el párrafo.
+function dibujarParrafoConEmoji(doc, texto, x, yInicial, anchoMax, tamanoPt, alturaLineaMm){
+  const anchoEmojiMm = tamanoPt * 0.3528;
+  const tokens = [];
+  segmentarTextoConEmoji(texto).forEach(seg=>{
+    if(seg.tipo === 'emoji'){
+      tokens.push({tipo:'emoji', valor: seg.valor, ancho: anchoEmojiMm});
+    } else {
+      seg.valor.split(/(\s+)/).filter(Boolean).forEach(parte=>{
+        const esEspacio = /^\s+$/.test(parte);
+        tokens.push({tipo: esEspacio ? 'espacio' : 'texto', valor: parte, ancho: doc.getTextWidth(parte)});
+      });
+    }
+  });
+
+  const lineas = [[]];
+  let anchoLinea = 0;
+  tokens.forEach(tok=>{
+    if(anchoLinea + tok.ancho > anchoMax && lineas[lineas.length-1].length > 0 && tok.tipo !== 'espacio'){
+      lineas.push([]);
+      anchoLinea = 0;
+    }
+    // evita empezar una línea nueva con un espacio suelto
+    if(tok.tipo === 'espacio' && lineas[lineas.length-1].length === 0) return;
+    lineas[lineas.length-1].push(tok);
+    anchoLinea += tok.ancho;
+  });
+
+  let y = yInicial;
+  lineas.forEach(linea=>{
+    let xCursor = x;
+    linea.forEach(tok=>{
+      if(tok.tipo === 'emoji'){
+        const dataUrl = emojiAPngDataUrl(tok.valor, tamanoPt);
+        doc.addImage(dataUrl, 'PNG', xCursor, y - anchoEmojiMm*0.78, anchoEmojiMm, anchoEmojiMm);
+      } else if(tok.tipo === 'texto'){
+        doc.text(tok.valor, xCursor, y);
+      }
+      xCursor += tok.ancho;
+    });
+    y += alturaLineaMm;
+  });
+  return y;
+}
+
 async function generarLibroPDF(){
   const btn = document.getElementById('btn-generar-libro');
   const statusLibro = document.getElementById('status-libro');
@@ -1537,9 +1647,8 @@ async function generarLibroPDF(){
 
       if(p.convocatoria.texto && p.convocatoria.texto.trim()){
         doc.setFont('helvetica','italic'); doc.setFontSize(10); doc.setTextColor(90);
-        const lineas = doc.splitTextToSize(p.convocatoria.texto, pageWidth - margin*2);
-        doc.text(lineas, margin, y);
-        y += lineas.length * 4.8 + 6;
+        y = dibujarParrafoConEmoji(doc, p.convocatoria.texto, margin, y, pageWidth - margin*2, 10, 4.8);
+        y += 6;
       } else {
         doc.setFont('helvetica','italic'); doc.setFontSize(9.5); doc.setTextColor(160);
         doc.text('(Sin texto de convocatoria)', margin, y);
@@ -1583,14 +1692,15 @@ async function generarLibroPDF(){
         yc += 6.5;
         doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
         cambios.forEach(c=>{
+          const baja = c.jugador_baja || '';
+          const entra = c.jugador_entra || '(sin sustituto)';
           doc.setTextColor(190,60,60);
-          doc.text(c.jugador_baja, margin + 5, yc);
-          const anchoBaja = doc.getTextWidth(c.jugador_baja);
+          const anchoBaja = dibujarLineaConEmoji(doc, baja, margin + 5, yc, 9.5);
           doc.setTextColor(120,120,120);
           doc.text('  ->  ', margin + 5 + anchoBaja, yc);
           const anchoFlecha = doc.getTextWidth('  ->  ');
           doc.setTextColor(40,120,70);
-          doc.text(c.jugador_entra || '(sin sustituto)', margin + 5 + anchoBaja + anchoFlecha, yc);
+          dibujarLineaConEmoji(doc, entra, margin + 5 + anchoBaja + anchoFlecha, yc, 9.5);
           yc += 6;
         });
         y += altoBloqueCambios + 8;
