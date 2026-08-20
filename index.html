@@ -40,6 +40,7 @@
     background:linear-gradient(180deg,#151c22,#10151a);
     position:sticky; top:0; z-index:20;
   }
+  header.top .inner{max-width:640px; margin:0 auto;}
   header.top .stripe{
     height:4px; width:46px; background:var(--pitch); border-radius:3px; margin-bottom:10px;
   }
@@ -49,11 +50,10 @@
   main{max-width:640px; margin:0 auto; padding:16px;}
 
   nav.tabs{
-    position:fixed; bottom:0; left:0; right:0; z-index:30;
+    position:fixed; bottom:0; left:50%; transform:translateX(-50%); z-index:30;
     display:flex; background:#151c22; border-top:1px solid var(--line);
-    max-width:640px; margin:0 auto;
+    width:100%; max-width:640px;
   }
-  @media(min-width:640px){ nav.tabs{ left:50%; transform:translateX(-50%);} }
   nav.tabs button{
     flex:1; background:none; border:none; color:var(--text-dim);
     font-family:'Inter'; font-size:11.5px; font-weight:600;
@@ -194,9 +194,11 @@
 <body>
 
 <header class="top">
-  <div class="stripe"></div>
-  <h1>Fútbol Jueves Mundial</h1>
-  <p>Convocatorias, alineaciones y bajas del grupo</p>
+  <div class="inner">
+    <div class="stripe"></div>
+    <h1>Fútbol Jueves Mundial</h1>
+    <p>Convocatorias, alineaciones y bajas del grupo</p>
+  </div>
 </header>
 
 <main>
@@ -711,10 +713,6 @@ function renderHistorial(){
     body.appendChild(convWrap);
     pintarConvocatoria(convWrap, p);
 
-    const sustWrap = document.createElement('div');
-    body.appendChild(sustWrap);
-    pintarPanelSustitucion(sustWrap, p);
-
     [...p.alineaciones].sort((a,b)=>b.version-a.version).forEach(a=>{
       const vDiv = document.createElement('div');
       vDiv.style.marginBottom = '14px';
@@ -889,120 +887,6 @@ async function eliminarDia(p){
   if(error){ console.error(error); toast('Error eliminando el partido'); return; }
   await cargarDesdeSupabase();
   toast('Día eliminado');
-  renderHistorial();
-}
-
-/* ---------- Sustitución manual sin foto nueva ---------- */
-/* Crea una nueva versión de alineación reutilizando la misma foto que la
-   vigente (no hay imagen nueva que leer), copiando su plantilla de jugadores
-   con el cambio aplicado, y registrando la sustitución en "cambios". Así el
-   libro en PDF y las estadísticas de bajas/altas quedan igual que si el
-   cambio se hubiera detectado a partir de una foto. */
-function pintarPanelSustitucion(contenedor, p){
-  contenedor.innerHTML = '';
-  const vigente = p.alineaciones.find(a => a.valida);
-  if(!vigente || !vigente.jugadores.length) return; // nada que sustituir todavía
-
-  const btn = document.createElement('button');
-  btn.className = 'secondary';
-  btn.textContent = '🔁 Registrar sustitución (sin foto nueva)';
-  btn.addEventListener('click', ()=> abrirFormSustitucion(contenedor, p, vigente));
-  contenedor.appendChild(btn);
-}
-
-function abrirFormSustitucion(contenedor, p, vigente){
-  contenedor.innerHTML = '';
-  const box = document.createElement('div');
-  box.className = 'diff-box';
-  box.innerHTML = `<h3>🔁 Registrar sustitución</h3>
-    <p style="font-size:12px; color:var(--text-dim); margin:0 0 10px;">
-      Se creará una nueva versión de la alineación reutilizando la foto actual
-      (no hace falta subir una nueva), y quedará registrada como baja/alta.
-    </p>`;
-
-  const label1 = document.createElement('label');
-  label1.style.margin = '0 0 6px';
-  label1.textContent = 'Jugador que causa baja';
-  const select = document.createElement('select');
-  select.style.cssText = 'width:100%; background:var(--surface-2); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:9px; font-size:14px;';
-  vigente.jugadores.forEach(j=>{
-    const opt = document.createElement('option');
-    opt.value = j.nombre;
-    opt.textContent = `${j.nombre} (${j.equipo || '?'})`;
-    select.appendChild(opt);
-  });
-  box.appendChild(label1);
-  box.appendChild(select);
-
-  const label2 = document.createElement('label');
-  label2.style.margin = '14px 0 6px';
-  label2.textContent = 'Jugador que entra';
-  const inputEntra = document.createElement('input');
-  inputEntra.type = 'text';
-  inputEntra.placeholder = 'Nombre del jugador que entra';
-  box.appendChild(label2);
-  box.appendChild(inputEntra);
-
-  const acciones = document.createElement('div');
-  acciones.className = 'version-actions';
-  const btnGuardar = document.createElement('button');
-  btnGuardar.textContent = '💾 Guardar sustitución';
-  btnGuardar.addEventListener('click', ()=> guardarSustitucion(contenedor, p, vigente, select.value, inputEntra.value, btnGuardar));
-  const btnCancelar = document.createElement('button');
-  btnCancelar.textContent = '✖ Cancelar';
-  btnCancelar.addEventListener('click', ()=> pintarPanelSustitucion(contenedor, p));
-  acciones.appendChild(btnGuardar);
-  acciones.appendChild(btnCancelar);
-  box.appendChild(acciones);
-
-  contenedor.appendChild(box);
-  inputEntra.focus();
-}
-
-async function guardarSustitucion(contenedor, p, vigente, jugadorBaja, jugadorEntraRaw, btnGuardar){
-  const jugadorEntra = (jugadorEntraRaw || '').trim();
-  if(!jugadorEntra){ toast('Falta el nombre del jugador que entra'); return; }
-  if(!supabaseListo()) return;
-
-  btnGuardar.disabled = true;
-  btnGuardar.textContent = 'Guardando...';
-
-  const nuevaVersion = Math.max(...p.alineaciones.map(a=>a.version), 0) + 1;
-  const nuevaId = `${p.fecha}-v${nuevaVersion}`;
-
-  const nuevosJugadores = vigente.jugadores.map(j =>
-    j.nombre === jugadorBaja ? {nombre: jugadorEntra, posicion: j.posicion, equipo: j.equipo} : j
-  );
-
-  // Reutiliza la misma imagen_url de la versión vigente: no hay foto nueva.
-  const { error: errAlineacion } = await supabaseClient.from('alineaciones').insert({
-    id: nuevaId,
-    partido_id: p.fecha,
-    version: nuevaVersion,
-    valida: true,
-    fecha_mensaje: new Date().toISOString(),
-    imagen_url: vigente.imagen_url
-  });
-  if(errAlineacion){
-    console.error(errAlineacion);
-    toast('Error registrando la sustitución');
-    btnGuardar.disabled = false;
-    btnGuardar.textContent = '💾 Guardar sustitución';
-    return;
-  }
-
-  const { error: errJug } = await supabaseClient.from('jugadores_alineacion').insert(
-    nuevosJugadores.map(j => ({alineacion_id: nuevaId, nombre: j.nombre, posicion: j.posicion, equipo: j.equipo}))
-  );
-  if(errJug) console.error(errJug);
-
-  const { error: errCambio } = await supabaseClient.from('cambios').insert({
-    alineacion_id: nuevaId, jugador_baja: jugadorBaja, jugador_entra: jugadorEntra
-  });
-  if(errCambio) console.error(errCambio);
-
-  await cargarDesdeSupabase();
-  toast('Sustitución registrada ✅');
   renderHistorial();
 }
 
