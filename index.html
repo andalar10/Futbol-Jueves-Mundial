@@ -1121,6 +1121,23 @@ async function renderStatsJugadores(){
 }
 
 /* ---------- Generar libro en PDF (un partido por página) ---------- */
+/* La fuente estándar (Helvetica) de jsPDF no tiene glyphs para emoji: si se
+   le pasan tal cual, se pintan como caracteres sueltos de otra codificación
+   (ej. "🍻" -> "Ø<ß") y además splitTextToSize calcula mal el ancho de línea
+   con esos caracteres, dejando el texto justificado de forma irregular.
+   Por eso se eliminan antes de insertarlos en el PDF. */
+function limpiarParaPDF(texto){
+  if(!texto) return texto;
+  return texto
+    .replace(/[\u{1F1E6}-\u{1F1FF}]/gu, '')   // banderas (pares de indicadores regionales)
+    .replace(/[\u{1F300}-\u{1FAFF}]/gu, '')   // emoji (símbolos, pictogramas, transporte, etc.)
+    .replace(/[\u{2600}-\u{27BF}]/gu, '')     // símbolos misceláneos y dingbats (☀️✅✏️🍻 etc.)
+    .replace(/[\u{2B00}-\u{2BFF}]/gu, '')     // flechas y símbolos misceláneos adicionales
+    .replace(/[\u{FE0F}\u{200D}]/gu, '')      // variation selector y zero-width joiner
+    .replace(/[ \t]{2,}/g, ' ')               // colapsa huecos que deja el emoji al quitarlo
+    .trim();
+}
+
 function urlAImagenBase64(url){
   return fetch(url)
     .then(res => { if(!res.ok) throw new Error('No se pudo descargar la imagen'); return res.blob(); })
@@ -1207,7 +1224,8 @@ async function generarLibroPDF(){
 
       if(p.convocatoria.texto && p.convocatoria.texto.trim()){
         doc.setFont('helvetica','italic'); doc.setFontSize(10); doc.setTextColor(90);
-        const lineas = doc.splitTextToSize(p.convocatoria.texto, pageWidth - margin*2);
+        const textoConvLimpio = limpiarParaPDF(p.convocatoria.texto);
+        const lineas = doc.splitTextToSize(textoConvLimpio, pageWidth - margin*2);
         doc.text(lineas, margin, y);
         y += lineas.length * 4.8 + 6;
       } else {
@@ -1253,14 +1271,16 @@ async function generarLibroPDF(){
         yc += 6.5;
         doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
         cambios.forEach(c=>{
+          const bajaLimpia = limpiarParaPDF(c.jugador_baja) || c.jugador_baja || '';
+          const entraLimpia = limpiarParaPDF(c.jugador_entra) || '(sin sustituto)';
           doc.setTextColor(190,60,60);
-          doc.text(c.jugador_baja, margin + 5, yc);
-          const anchoBaja = doc.getTextWidth(c.jugador_baja);
+          doc.text(bajaLimpia, margin + 5, yc);
+          const anchoBaja = doc.getTextWidth(bajaLimpia);
           doc.setTextColor(120,120,120);
           doc.text('  ->  ', margin + 5 + anchoBaja, yc);
           const anchoFlecha = doc.getTextWidth('  ->  ');
           doc.setTextColor(40,120,70);
-          doc.text(c.jugador_entra || '(sin sustituto)', margin + 5 + anchoBaja + anchoFlecha, yc);
+          doc.text(entraLimpia, margin + 5 + anchoBaja + anchoFlecha, yc);
           yc += 6;
         });
         y += altoBloqueCambios + 8;
