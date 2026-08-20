@@ -748,7 +748,7 @@ function renderHistorial(){
 
       const zonaJugadores = document.createElement('div');
       vDiv.appendChild(zonaJugadores);
-      pintarJugadoresVersion(zonaJugadores, a);
+      pintarJugadoresVersion(zonaJugadores, a, p);
 
       body.appendChild(vDiv);
     });
@@ -903,7 +903,7 @@ function agruparPorEquipo(jugadores){
   return {equipos: [...mapa.entries()].map(([color, jugadores])=>({color, jugadores}))};
 }
 
-function pintarJugadoresVersion(contenedor, alineacion){
+function pintarJugadoresVersion(contenedor, alineacion, partido){
   contenedor.innerHTML = '';
 
   const chips = document.createElement('div');
@@ -918,6 +918,13 @@ function pintarJugadoresVersion(contenedor, alineacion){
 
   const acciones = document.createElement('div');
   acciones.className = 'version-actions';
+  if(alineacion.valida && partido){
+    const btnSustitucion = document.createElement('button');
+    btnSustitucion.type = 'button';
+    btnSustitucion.textContent = '🔁 Sustitución';
+    btnSustitucion.addEventListener('click', ()=> iniciarSustitucion(contenedor, alineacion, partido));
+    acciones.appendChild(btnSustitucion);
+  }
   const btnEditar = document.createElement('button');
   btnEditar.type = 'button';
   btnEditar.textContent = '✏️ Editar jugadores';
@@ -926,15 +933,107 @@ function pintarJugadoresVersion(contenedor, alineacion){
     const btnReprocesar = document.createElement('button');
     btnReprocesar.type = 'button';
     btnReprocesar.textContent = '🔄 Reprocesar con IA';
-    btnReprocesar.addEventListener('click', ()=> reprocesarVersion(contenedor, alineacion, btnReprocesar));
+    btnReprocesar.addEventListener('click', ()=> reprocesarVersion(contenedor, alineacion, btnReprocesar, partido));
     acciones.appendChild(btnReprocesar);
   }
   contenedor.appendChild(acciones);
 
-  btnEditar.addEventListener('click', ()=> entrarModoEdicion(contenedor, alineacion, agruparPorEquipo(alineacion.jugadores)));
+  btnEditar.addEventListener('click', ()=> entrarModoEdicion(contenedor, alineacion, agruparPorEquipo(alineacion.jugadores), partido));
 }
 
-function entrarModoEdicion(contenedor, alineacion, data){
+/* ---------- Sustitución sin cambiar la foto: crea una nueva versión reutilizando la misma imagen ---------- */
+function iniciarSustitucion(contenedor, alineacion, partido){
+  const data = agruparPorEquipo(alineacion.jugadores);
+  const nombresOriginales = alineacion.jugadores.map(j=>j.nombre);
+
+  contenedor.innerHTML = '';
+  const aviso = document.createElement('p');
+  aviso.style.cssText = 'font-size:12.5px; color:var(--text-dim); margin:0 0 10px;';
+  aviso.textContent = 'Quita al jugador que causa baja y añade su sustituto (o nuevas incorporaciones). Al guardar se creará una nueva versión con la misma foto, y esta quedará marcada como sustituida.';
+  contenedor.appendChild(aviso);
+
+  const editor = document.createElement('div');
+  editor.className = 'roster';
+  contenedor.appendChild(editor);
+  crearEditorEquiposHistorial(data, editor);
+
+  const acciones = document.createElement('div');
+  acciones.className = 'version-actions';
+  const btnGuardar = document.createElement('button');
+  btnGuardar.type = 'button';
+  btnGuardar.textContent = '💾 Guardar sustitución';
+  btnGuardar.addEventListener('click', ()=> guardarSustitucion(contenedor, alineacion, partido, data, nombresOriginales, btnGuardar));
+  const btnCancelar = document.createElement('button');
+  btnCancelar.type = 'button';
+  btnCancelar.textContent = '✖ Cancelar';
+  btnCancelar.addEventListener('click', ()=> pintarJugadoresVersion(contenedor, alineacion, partido));
+  acciones.appendChild(btnGuardar);
+  acciones.appendChild(btnCancelar);
+  contenedor.appendChild(acciones);
+}
+
+async function guardarSustitucion(contenedor, alineacion, partido, data, nombresOriginales, btnGuardar){
+  if(!supabaseListo()) return;
+
+  const jugadoresPlano = data.equipos.flatMap(e =>
+    e.jugadores.filter(j=>j.nombre.trim()).map(j => ({nombre:j.nombre.trim(), posicion:j.posicion, equipo:e.color}))
+  );
+  const nombresNuevos = jugadoresPlano.map(j=>j.nombre);
+  const nombresAntesSet = new Set(nombresOriginales);
+  const nombresAhoraSet = new Set(nombresNuevos);
+  const bajas = nombresOriginales.filter(n => !nombresAhoraSet.has(n));
+  const altas = nombresNuevos.filter(n => !nombresAntesSet.has(n));
+
+  if(bajas.length === 0 && altas.length === 0){
+    toast('No se ha detectado ningún cambio en la plantilla');
+    return;
+  }
+
+  btnGuardar.disabled = true;
+  btnGuardar.textContent = 'Guardando...';
+
+  const nuevaVersion = Math.max(...partido.alineaciones.map(a=>a.version), 0) + 1;
+  const alineacionId = `${partido.fecha}-v${nuevaVersion}`;
+
+  // Reutiliza la misma imagen_url que la versión de origen. El trigger de la
+  // tabla "alineaciones" invalida automáticamente la versión anterior vigente.
+  const { error: errAlineacion } = await supabaseClient.from('alineaciones').insert({
+    id: alineacionId,
+    partido_id: partido.fecha,
+    version: nuevaVersion,
+    valida: true,
+    fecha_mensaje: new Date().toISOString(),
+    imagen_url: alineacion.imagen_url
+  });
+  if(errAlineacion){
+    console.error(errAlineacion);
+    toast('Error guardando la sustitución');
+    btnGuardar.disabled = false;
+    btnGuardar.textContent = '💾 Guardar sustitución';
+    return;
+  }
+
+  if(jugadoresPlano.length){
+    const { error: errJug } = await supabaseClient.from('jugadores_alineacion').insert(
+      jugadoresPlano.map(j => ({alineacion_id: alineacionId, nombre: j.nombre, posicion: j.posicion, equipo: j.equipo}))
+    );
+    if(errJug) console.error(errJug);
+  }
+
+  const cambiosParaGuardar = bajas.map((baja, i) => ({jugador_baja: baja, jugador_entra: altas[i] || null}));
+  if(cambiosParaGuardar.length){
+    const { error: errCambios } = await supabaseClient.from('cambios').insert(
+      cambiosParaGuardar.map(c => ({alineacion_id: alineacionId, jugador_baja: c.jugador_baja, jugador_entra: c.jugador_entra}))
+    );
+    if(errCambios) console.error(errCambios);
+  }
+
+  await cargarDesdeSupabase();
+  toast('Sustitución registrada ✅');
+  renderHistorial();
+}
+
+function entrarModoEdicion(contenedor, alineacion, data, partido){
   contenedor.innerHTML = '';
   const editor = document.createElement('div');
   editor.className = 'roster';
@@ -946,11 +1045,11 @@ function entrarModoEdicion(contenedor, alineacion, data){
   const btnGuardar = document.createElement('button');
   btnGuardar.type = 'button';
   btnGuardar.textContent = '💾 Guardar cambios';
-  btnGuardar.addEventListener('click', ()=> guardarJugadoresVersion(contenedor, alineacion, data, btnGuardar));
+  btnGuardar.addEventListener('click', ()=> guardarJugadoresVersion(contenedor, alineacion, data, btnGuardar, partido));
   const btnCancelar = document.createElement('button');
   btnCancelar.type = 'button';
   btnCancelar.textContent = '✖ Cancelar';
-  btnCancelar.addEventListener('click', ()=> pintarJugadoresVersion(contenedor, alineacion));
+  btnCancelar.addEventListener('click', ()=> pintarJugadoresVersion(contenedor, alineacion, partido));
   acciones.appendChild(btnGuardar);
   acciones.appendChild(btnCancelar);
   contenedor.appendChild(acciones);
@@ -995,7 +1094,7 @@ function crearEditorEquiposHistorial(data, contenedor){
   });
 }
 
-async function guardarJugadoresVersion(contenedor, alineacion, data, btnGuardar){
+async function guardarJugadoresVersion(contenedor, alineacion, data, btnGuardar, partido){
   if(!supabaseListo()) return;
   btnGuardar.disabled = true;
   btnGuardar.textContent = 'Guardando...';
@@ -1015,10 +1114,10 @@ async function guardarJugadoresVersion(contenedor, alineacion, data, btnGuardar)
   alineacion.jugadores = jugadoresPlano;
   await cargarDesdeSupabase();
   toast('Jugadores actualizados ✅');
-  pintarJugadoresVersion(contenedor, alineacion);
+  pintarJugadoresVersion(contenedor, alineacion, partido);
 }
 
-async function reprocesarVersion(contenedor, alineacion, btnReprocesar){
+async function reprocesarVersion(contenedor, alineacion, btnReprocesar, partido){
   btnReprocesar.disabled = true;
   btnReprocesar.textContent = 'Leyendo imagen...';
   const status = document.createElement('div');
@@ -1029,11 +1128,11 @@ async function reprocesarVersion(contenedor, alineacion, btnReprocesar){
   try{
     const parsed = await llamarExtraccion({image_url: alineacion.imagen_url});
     toast('Nueva lectura lista, revisa antes de guardar');
-    entrarModoEdicion(contenedor, alineacion, parsed);
+    entrarModoEdicion(contenedor, alineacion, parsed, partido);
   }catch(err){
     console.error(err);
     toast('No se pudo reprocesar la imagen');
-    pintarJugadoresVersion(contenedor, alineacion);
+    pintarJugadoresVersion(contenedor, alineacion, partido);
   }
 }
 
@@ -1121,115 +1220,6 @@ async function renderStatsJugadores(){
 }
 
 /* ---------- Generar libro en PDF (un partido por página) ---------- */
-/* La fuente estándar (Helvetica) de jsPDF no tiene glyphs para emoji: si se
-   le pasan tal cual como texto, se pintan como caracteres sueltos de otra
-   codificación (ej. "🍻" -> "Ø<ß") y además splitTextToSize calcula mal el
-   ancho de línea con esos caracteres, dejando el texto mal ajustado.
-   Solución: detectar los emoji, dibujarlos como pequeñas imágenes PNG usando
-   el emoji a color del propio navegador (vía canvas) e insertarlos en el PDF
-   en el punto exacto del texto; el resto sigue siendo texto vectorial normal. */
-
-const EMOJI_REGEX = /(\p{Extended_Pictographic}(?:\uFE0F)?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F)?)*|[\u{1F1E6}-\u{1F1FF}]{2})/gu;
-
-// Divide un texto en segmentos alternos {tipo:'texto'|'emoji', valor}
-function segmentarTextoConEmoji(texto){
-  const segmentos = [];
-  let ultimo = 0, m;
-  EMOJI_REGEX.lastIndex = 0;
-  while((m = EMOJI_REGEX.exec(texto))){
-    if(m.index > ultimo) segmentos.push({tipo:'texto', valor: texto.slice(ultimo, m.index)});
-    segmentos.push({tipo:'emoji', valor: m[0]});
-    ultimo = m.index + m[0].length;
-  }
-  if(ultimo < texto.length) segmentos.push({tipo:'texto', valor: texto.slice(ultimo)});
-  return segmentos;
-}
-
-// Cachea el PNG de cada emoji (por emoji + tamaño) para no redibujarlo en canvas cada vez
-const cacheImagenesEmoji = new Map();
-function emojiAPngDataUrl(emoji, tamanoPt){
-  const clave = emoji + '|' + tamanoPt;
-  if(cacheImagenesEmoji.has(clave)) return cacheImagenesEmoji.get(clave);
-  const escala = 6; // supermuestreo para que se vea nítido al escalarlo dentro del PDF
-  const pxCanvas = Math.round(tamanoPt * escala);
-  const canvas = document.createElement('canvas');
-  canvas.width = pxCanvas;
-  canvas.height = pxCanvas;
-  const ctx = canvas.getContext('2d');
-  ctx.clearRect(0, 0, pxCanvas, pxCanvas);
-  ctx.font = `${Math.round(pxCanvas*0.82)}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(emoji, pxCanvas/2, pxCanvas/2 + pxCanvas*0.04);
-  const dataUrl = canvas.toDataURL('image/png');
-  cacheImagenesEmoji.set(clave, dataUrl);
-  return dataUrl;
-}
-
-// Dibuja texto+emoji en una sola línea (sin salto de línea), usando la fuente/tamaño/color
-// ya configurados en doc. Devuelve el ancho total en mm ocupado.
-function dibujarLineaConEmoji(doc, texto, x, y, tamanoPt){
-  const anchoEmojiMm = tamanoPt * 0.3528; // aprox. cuadrado, mismo tamaño que la altura de fuente
-  let xCursor = x;
-  segmentarTextoConEmoji(texto).forEach(seg=>{
-    if(seg.tipo === 'emoji'){
-      const dataUrl = emojiAPngDataUrl(seg.valor, tamanoPt);
-      doc.addImage(dataUrl, 'PNG', xCursor, y - anchoEmojiMm*0.78, anchoEmojiMm, anchoEmojiMm);
-      xCursor += anchoEmojiMm;
-    } else if(seg.valor){
-      doc.text(seg.valor, xCursor, y);
-      xCursor += doc.getTextWidth(seg.valor);
-    }
-  });
-  return xCursor - x;
-}
-
-// Dibuja un párrafo con salto de línea automático (como splitTextToSize + text, pero
-// con emoji insertados como imágenes en el lugar correcto). Devuelve la nueva y tras el párrafo.
-function dibujarParrafoConEmoji(doc, texto, x, yInicial, anchoMax, tamanoPt, alturaLineaMm){
-  const anchoEmojiMm = tamanoPt * 0.3528;
-  const tokens = [];
-  segmentarTextoConEmoji(texto).forEach(seg=>{
-    if(seg.tipo === 'emoji'){
-      tokens.push({tipo:'emoji', valor: seg.valor, ancho: anchoEmojiMm});
-    } else {
-      seg.valor.split(/(\s+)/).filter(Boolean).forEach(parte=>{
-        const esEspacio = /^\s+$/.test(parte);
-        tokens.push({tipo: esEspacio ? 'espacio' : 'texto', valor: parte, ancho: doc.getTextWidth(parte)});
-      });
-    }
-  });
-
-  const lineas = [[]];
-  let anchoLinea = 0;
-  tokens.forEach(tok=>{
-    if(anchoLinea + tok.ancho > anchoMax && lineas[lineas.length-1].length > 0 && tok.tipo !== 'espacio'){
-      lineas.push([]);
-      anchoLinea = 0;
-    }
-    // evita empezar una línea nueva con un espacio suelto
-    if(tok.tipo === 'espacio' && lineas[lineas.length-1].length === 0) return;
-    lineas[lineas.length-1].push(tok);
-    anchoLinea += tok.ancho;
-  });
-
-  let y = yInicial;
-  lineas.forEach(linea=>{
-    let xCursor = x;
-    linea.forEach(tok=>{
-      if(tok.tipo === 'emoji'){
-        const dataUrl = emojiAPngDataUrl(tok.valor, tamanoPt);
-        doc.addImage(dataUrl, 'PNG', xCursor, y - anchoEmojiMm*0.78, anchoEmojiMm, anchoEmojiMm);
-      } else if(tok.tipo === 'texto'){
-        doc.text(tok.valor, xCursor, y);
-      }
-      xCursor += tok.ancho;
-    });
-    y += alturaLineaMm;
-  });
-  return y;
-}
-
 function urlAImagenBase64(url){
   return fetch(url)
     .then(res => { if(!res.ok) throw new Error('No se pudo descargar la imagen'); return res.blob(); })
@@ -1316,8 +1306,9 @@ async function generarLibroPDF(){
 
       if(p.convocatoria.texto && p.convocatoria.texto.trim()){
         doc.setFont('helvetica','italic'); doc.setFontSize(10); doc.setTextColor(90);
-        y = dibujarParrafoConEmoji(doc, p.convocatoria.texto, margin, y, pageWidth - margin*2, 10, 4.8);
-        y += 6;
+        const lineas = doc.splitTextToSize(p.convocatoria.texto, pageWidth - margin*2);
+        doc.text(lineas, margin, y);
+        y += lineas.length * 4.8 + 6;
       } else {
         doc.setFont('helvetica','italic'); doc.setFontSize(9.5); doc.setTextColor(160);
         doc.text('(Sin texto de convocatoria)', margin, y);
@@ -1361,15 +1352,14 @@ async function generarLibroPDF(){
         yc += 6.5;
         doc.setFont('helvetica','normal'); doc.setFontSize(9.5);
         cambios.forEach(c=>{
-          const baja = c.jugador_baja || '';
-          const entra = c.jugador_entra || '(sin sustituto)';
           doc.setTextColor(190,60,60);
-          const anchoBaja = dibujarLineaConEmoji(doc, baja, margin + 5, yc, 9.5);
+          doc.text(c.jugador_baja, margin + 5, yc);
+          const anchoBaja = doc.getTextWidth(c.jugador_baja);
           doc.setTextColor(120,120,120);
           doc.text('  ->  ', margin + 5 + anchoBaja, yc);
           const anchoFlecha = doc.getTextWidth('  ->  ');
           doc.setTextColor(40,120,70);
-          dibujarLineaConEmoji(doc, entra, margin + 5 + anchoBaja + anchoFlecha, yc, 9.5);
+          doc.text(c.jugador_entra || '(sin sustituto)', margin + 5 + anchoBaja + anchoFlecha, yc);
           yc += 6;
         });
         y += altoBloqueCambios + 8;
