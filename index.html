@@ -135,6 +135,35 @@
   .sub-row .in{color:#8fd6a3; font-weight:600;}
   .sub-row select{margin-left:auto; background:var(--surface-2); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:5px 6px; font-size:12px;}
 
+  /* Selector de jugador con autocomplete + alta rápida */
+  .combo-jugador{position:relative; flex:1;}
+  .combo-jugador input[type=text]{width:100%; background:none; border:none; padding:2px; font-size:14px; color:var(--text);}
+  .combo-jugador input[type=text]:focus{outline:none;}
+  .combo-dropdown{
+    display:none; position:absolute; left:0; right:0; top:calc(100% + 4px); z-index:40;
+    background:var(--surface-2); border:1px solid var(--line); border-radius:8px;
+    max-height:180px; overflow-y:auto; box-shadow:0 6px 18px #0007;
+  }
+  .combo-item{padding:9px 11px; font-size:13.5px; cursor:pointer; border-bottom:1px solid var(--line);}
+  .combo-item:last-child{border-bottom:none;}
+  .combo-item:hover, .combo-item:active{background:var(--surface);}
+  .combo-item-nuevo{color:var(--pitch); font-weight:600;}
+  .combo-item-vacio{color:var(--text-dim); cursor:default;}
+
+  /* Editor de sustituciones (pares "sale" / "entra") */
+  .sub-editor{margin-top:10px;}
+  .sub-editor-row{
+    display:flex; align-items:center; gap:8px; background:var(--surface-2); border:1px solid var(--line);
+    border-radius:9px; padding:8px 10px; margin-bottom:8px; flex-wrap:wrap;
+  }
+  .sub-editor-row select{
+    flex:1; min-width:110px; background:var(--surface); color:var(--text); border:1px solid var(--line);
+    border-radius:8px; padding:9px 8px; font-size:13.5px; font-family:'Inter';
+  }
+  .sub-editor-row .combo-jugador{min-width:110px; background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:0 8px;}
+  .sub-editor-row .arrow{color:var(--text-dim); font-size:14px;}
+  .sub-editor-row button.rm{background:none; border:none; color:#8a5555; font-size:16px; cursor:pointer; padding:2px 4px;}
+
   /* Historial */
   .partido-card{padding:0; overflow:hidden;}
   .p-head{padding:14px 16px; display:flex; justify-content:space-between; align-items:center; cursor:pointer;}
@@ -363,6 +392,126 @@ async function cargarDesdeSupabase(){
   }));
 }
 
+/* ---------- Catálogo de jugadores (nicks canónicos) ---------- */
+let jugadoresCatalogo = []; // [{id, nombre_display}], cache en memoria
+
+async function cargarJugadoresCatalogo(){
+  if(!supabaseClient) return;
+  const { data, error } = await supabaseClient.from('jugadores').select('*').order('nombre_display');
+  if(error){ console.error(error); return; }
+  jugadoresCatalogo = data || [];
+}
+
+function normalizarTexto(s){
+  return (s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().trim();
+}
+
+// Busca en el catálogo un jugador cuyo nick coincida EXACTO (ignorando
+// mayúsculas/acentos no se hace aquí a propósito: "Iván" e "Ivan rayo" deben
+// seguir siendo jugadores distintos aunque el resto del nombre coincida).
+function buscarJugadorExacto(nombre){
+  const limpio = (nombre||'').trim();
+  return jugadoresCatalogo.find(j => j.nombre_display.trim() === limpio) || null;
+}
+
+// Da de alta un jugador nuevo en el catálogo si no existe ya exactamente ese
+// nick, y devuelve el registro (nuevo o existente). Nunca lanza si algo falla
+// en el catálogo: como mucho, el jugador se guarda igual en la alineación con
+// su texto tal cual, solo que no quedará listado para el autocomplete.
+async function asegurarJugadorExiste(nombreCrudo){
+  const nombre = (nombreCrudo||'').trim();
+  if(!nombre) return null;
+  const existente = buscarJugadorExacto(nombre);
+  if(existente) return existente;
+  if(!supabaseClient) return {id:null, nombre_display:nombre};
+  const { data, error } = await supabaseClient.from('jugadores')
+    .insert({nombre_display: nombre})
+    .select()
+    .single();
+  if(error){
+    console.error('No se pudo dar de alta el jugador en el catálogo:', error);
+    return {id:null, nombre_display:nombre};
+  }
+  jugadoresCatalogo.push(data);
+  jugadoresCatalogo.sort((a,b)=> a.nombre_display.localeCompare(b.nombre_display));
+  return data;
+}
+
+/* Selector de jugador con autocomplete + alta rápida ("crear nuevo jugador").
+   options:
+     - valorInicial: texto de partida
+     - placeholder
+     - fuente(): función que devuelve la lista de {nombre_display} candidatos
+       (por defecto, todo el catálogo). Se usa para restringir opciones, p.ej.
+       a los jugadores presentes en una alineación concreta.
+     - permitirNuevo: si es false, no ofrece la opción de crear un jugador
+       nuevo (para selectores restringidos a una lista cerrada de personas).
+     - onChange(valorTexto): se llama con el texto actual cada vez que cambia.
+*/
+function crearComboboxJugador({valorInicial='', placeholder='Nombre', fuente=null, permitirNuevo=true, onChange=null}={}){
+  const wrap = document.createElement('div');
+  wrap.className = 'combo-jugador';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = placeholder;
+  input.value = valorInicial;
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  const lista = document.createElement('div');
+  lista.className = 'combo-dropdown';
+  wrap.appendChild(input);
+  wrap.appendChild(lista);
+
+  const obtenerFuente = () => (fuente ? fuente() : jugadoresCatalogo);
+
+  function render(filtro){
+    const norm = normalizarTexto(filtro);
+    const candidatos = obtenerFuente()
+      .filter(j => !norm || normalizarTexto(j.nombre_display).includes(norm))
+      .slice(0, 8);
+    lista.innerHTML = '';
+    candidatos.forEach(j=>{
+      const item = document.createElement('div');
+      item.className = 'combo-item';
+      item.textContent = j.nombre_display;
+      item.addEventListener('mousedown', (e)=>{ e.preventDefault(); seleccionar(j.nombre_display); });
+      lista.appendChild(item);
+    });
+    const existeExacto = obtenerFuente().some(j => j.nombre_display.trim().toLowerCase() === filtro.trim().toLowerCase());
+    if(permitirNuevo && filtro.trim() && !existeExacto){
+      const item = document.createElement('div');
+      item.className = 'combo-item combo-item-nuevo';
+      item.textContent = `+ Crear nuevo jugador "${filtro.trim()}"`;
+      item.addEventListener('mousedown', (e)=>{ e.preventDefault(); seleccionar(filtro.trim()); });
+      lista.appendChild(item);
+    }
+    if(candidatos.length === 0 && (!permitirNuevo || existeExacto || !filtro.trim())){
+      const item = document.createElement('div');
+      item.className = 'combo-item combo-item-vacio';
+      item.textContent = filtro.trim() ? 'Sin coincidencias' : 'Empieza a escribir para buscar...';
+      lista.appendChild(item);
+    }
+    lista.style.display = 'block';
+  }
+
+  function seleccionar(valor){
+    input.value = valor;
+    lista.style.display = 'none';
+    if(onChange) onChange(valor);
+  }
+
+  input.addEventListener('input', ()=>{
+    render(input.value);
+    if(onChange) onChange(input.value);
+  });
+  input.addEventListener('focus', ()=> render(input.value));
+  input.addEventListener('blur', ()=> setTimeout(()=> lista.style.display = 'none', 150));
+
+  wrap.getValue = () => input.value.trim();
+  wrap.setValue = (v) => { input.value = v; };
+  return wrap;
+}
+
 /* ---------- Estadísticas por jugador y partido (minutos/goles/tarjetas) ---------- */
 
 // Une los jugadores de TODAS las versiones de un partido (aunque hayan sido
@@ -378,20 +527,18 @@ function jugadoresUnicosPartido(partido){
   return [...mapa.values()];
 }
 
-// Reparte 60 minutos a partes iguales entre las versiones de alineación del
-// partido (una versión = un tramo del partido) y suma los tramos en los que
-// aparece cada jugador. Si solo hay una versión, todos juegan los 60 minutos.
+// Las sustituciones de este grupo se deciden ANTES del partido (para
+// organizar quién viene a jugar), no son cambios en juego. Por eso el
+// jugador que causa baja juega siempre 0 minutos y el que entra los 60
+// completos: no se reparte el partido en tramos por versión de alineación.
 function calcularMinutosAutomaticos(partido){
-  const versiones = [...partido.alineaciones].sort((a,b)=>a.version-b.version);
-  const n = versiones.length || 1;
-  const segmento = 60 / n;
   const minutos = {};
-  versiones.forEach(v=>{
-    v.jugadores.forEach(j=>{
-      minutos[j.nombre] = (minutos[j.nombre] || 0) + segmento;
+  jugadoresUnicosPartido(partido).forEach(j => { minutos[j.nombre] = 60; });
+  partido.alineaciones.forEach(a=>{
+    (a.cambios_respecto_anterior || []).forEach(c=>{
+      if(c.jugador_baja) minutos[c.jugador_baja] = 0;
     });
   });
-  Object.keys(minutos).forEach(k => minutos[k] = Math.round(minutos[k]));
   return minutos;
 }
 
@@ -554,23 +701,33 @@ function renderRosterEditor(data){
 function crearFilaJugador(ei, ji, jugador){
   const row = document.createElement('div');
   row.className = 'prow';
-  row.innerHTML = `
-    <input type="text" value="${escapeHtml(jugador.nombre)}" placeholder="Nombre">
-    <select>
+
+  const combo = crearComboboxJugador({
+    valorInicial: jugador.nombre,
+    placeholder: 'Nombre',
+    onChange: (valor)=> jugador.nombre = valor
+  });
+  row.appendChild(combo);
+
+  const selectEl = document.createElement('select');
+  selectEl.innerHTML = `
       <option value="portero" ${jugador.posicion==='portero'?'selected':''}>Portero</option>
       <option value="defensa" ${jugador.posicion==='defensa'?'selected':''}>Defensa</option>
       <option value="medio" ${jugador.posicion==='medio'?'selected':''}>Medio</option>
-      <option value="delantero" ${jugador.posicion==='delantero'?'selected':''}>Delantero</option>
-    </select>
-    <button title="Quitar">✕</button>`;
-  const [inputEl, selectEl, btnEl] = row.children;
-  inputEl.addEventListener('input', ()=> jugador.nombre = inputEl.value);
+      <option value="delantero" ${jugador.posicion==='delantero'?'selected':''}>Delantero</option>`;
   selectEl.addEventListener('change', ()=> jugador.posicion = selectEl.value);
+  row.appendChild(selectEl);
+
+  const btnEl = document.createElement('button');
+  btnEl.title = 'Quitar';
+  btnEl.textContent = '✕';
   btnEl.addEventListener('click', ()=>{
     const equipo = extraccionActual.equipos[ei];
     equipo.jugadores.splice(ji, 1);
     renderRosterEditor(extraccionActual);
   });
+  row.appendChild(btnEl);
+
   return row;
 }
 
@@ -633,7 +790,13 @@ function chequearVersionAnterior(){
 }
 
 /* re-chequear diffs cuando cambian los nombres tras la extracción */
-const observer = new MutationObserver(chequearVersionAnterior);
+const observer = new MutationObserver((mutaciones)=>{
+  // Ignora las mutaciones que solo tocan el desplegable de autocomplete de
+  // jugador (se reconstruye en cada pulsación de tecla y no cambia la lista
+  // de nombres real), para no recalcular el diff en cada letra escrita.
+  const relevante = mutaciones.some(m => !(m.target.closest && m.target.closest('.combo-dropdown')));
+  if(relevante) chequearVersionAnterior();
+});
 observer.observe(document.getElementById('roster-editor'), {childList:true, subtree:true});
 
 /* ---------- Guardar partido ---------- */
@@ -706,6 +869,8 @@ document.getElementById('btn-guardar').addEventListener('click', async ()=>{
     );
     if(errCambios) console.error(errCambios);
   }
+
+  for(const j of jugadoresPlano){ await asegurarJugadorExiste(j.nombre); }
 
   await cargarDesdeSupabase();
   toast('Partido guardado ✅');
@@ -805,15 +970,9 @@ function renderHistorial(){
         vDiv.appendChild(img);
       }
 
-      if(a.cambios_respecto_anterior && a.cambios_respecto_anterior.length){
-        const diffBox = document.createElement('div');
-        diffBox.className = 'diff-box';
-        diffBox.style.marginTop = '8px';
-        a.cambios_respecto_anterior.forEach(c=>{
-          diffBox.innerHTML += `<div class="sub-row"><span class="out">${escapeHtml(c.jugador_baja)}</span><span class="arrow">→</span><span class="in">${c.jugador_entra ? escapeHtml(c.jugador_entra) : '(sin sustituto)'}</span></div>`;
-        });
-        vDiv.appendChild(diffBox);
-      }
+      const zonaCambios = document.createElement('div');
+      vDiv.appendChild(zonaCambios);
+      pintarCambiosVersion(zonaCambios, a, p);
 
       const zonaJugadores = document.createElement('div');
       vDiv.appendChild(zonaJugadores);
@@ -1015,56 +1174,158 @@ function pintarJugadoresVersion(contenedor, alineacion, partido){
   btnEditar.addEventListener('click', ()=> entrarModoEdicion(contenedor, alineacion, agruparPorEquipo(alineacion.jugadores), partido));
 }
 
-/* ---------- Sustitución sin cambiar la foto: crea una nueva versión reutilizando la misma imagen ---------- */
-function iniciarSustitucion(contenedor, alineacion, partido){
-  const data = agruparPorEquipo(alineacion.jugadores);
-  const nombresOriginales = alineacion.jugadores.map(j=>j.nombre);
+/* ---------- Editor genérico de sustituciones (pares "sale" -> "entra") ----------
+   Se usa tanto para registrar una sustitución nueva como para corregir a
+   posteriori la lista de cambios ya guardada de una versión. "Sale" es
+   siempre un seleccionable (solo puede ser alguien que estuviera en el campo
+   en ese punto de la cadena); "entra" es un autocomplete sobre el catálogo
+   de jugadores que también permite dar de alta a alguien nuevo. Soporta
+   varias filas encadenadas (p.ej. Guiem -> Dani R. y luego Dani R. -> Iván
+   rayo) para que una doble sustitución quede bien reflejada. */
+function crearEditorSustituciones({rosterBase, filasIniciales, textoAviso, textoGuardar, onGuardar, onCancelar}){
+  const wrap = document.createElement('div');
 
-  contenedor.innerHTML = '';
-  const aviso = document.createElement('p');
-  aviso.style.cssText = 'font-size:12.5px; color:var(--text-dim); margin:0 0 10px;';
-  aviso.textContent = 'Quita al jugador que causa baja y añade su sustituto (o nuevas incorporaciones). Al guardar se creará una nueva versión con la misma foto, y esta quedará marcada como sustituida.';
-  contenedor.appendChild(aviso);
+  if(textoAviso){
+    const aviso = document.createElement('p');
+    aviso.style.cssText = 'font-size:12.5px; color:var(--text-dim); margin:0 0 10px;';
+    aviso.textContent = textoAviso;
+    wrap.appendChild(aviso);
+  }
+
+  const filas = (filasIniciales && filasIniciales.length ? filasIniciales : [{}]).map(f => ({
+    saleNombre: f.jugador_baja || '',
+    entraNombre: f.jugador_entra || ''
+  }));
 
   const editor = document.createElement('div');
-  editor.className = 'roster';
-  contenedor.appendChild(editor);
-  crearEditorEquiposHistorial(data, editor);
+  editor.className = 'sub-editor';
+  wrap.appendChild(editor);
+
+  // Roster resultante tras aplicar en orden las filas 0..i-1 (para que cada
+  // fila solo ofrezca como "sale" a quien sigue en el campo en ese punto).
+  function rosterHastaFila(i){
+    const roster = rosterBase.map(j => ({...j}));
+    for(let k=0; k<i; k++){
+      const f = filas[k];
+      if(!f.saleNombre || !f.entraNombre) continue;
+      const idx = roster.findIndex(j => j.nombre === f.saleNombre);
+      if(idx !== -1) roster[idx] = {...roster[idx], nombre: f.entraNombre};
+    }
+    return roster;
+  }
+
+  function render(){
+    editor.innerHTML = '';
+    filas.forEach((fila, i)=>{
+      const row = document.createElement('div');
+      row.className = 'sub-editor-row';
+
+      const disponibles = rosterHastaFila(i);
+      const selectSale = document.createElement('select');
+      const optVacia = document.createElement('option');
+      optVacia.value = '';
+      optVacia.textContent = 'Elige quién sale...';
+      selectSale.appendChild(optVacia);
+      disponibles.forEach(j=>{
+        const opt = document.createElement('option');
+        opt.value = j.nombre;
+        opt.textContent = j.nombre;
+        if(j.nombre === fila.saleNombre) opt.selected = true;
+        selectSale.appendChild(opt);
+      });
+      if(fila.saleNombre && !disponibles.some(j=>j.nombre===fila.saleNombre)){
+        const opt = document.createElement('option');
+        opt.value = fila.saleNombre;
+        opt.textContent = `${fila.saleNombre} (ya no está en el campo)`;
+        opt.selected = true;
+        selectSale.appendChild(opt);
+      }
+      selectSale.addEventListener('change', ()=>{ fila.saleNombre = selectSale.value; render(); });
+      row.appendChild(selectSale);
+
+      const arrow = document.createElement('span');
+      arrow.className = 'arrow';
+      arrow.textContent = '→';
+      row.appendChild(arrow);
+
+      const comboEntra = crearComboboxJugador({
+        valorInicial: fila.entraNombre,
+        placeholder: 'Quién entra',
+        onChange: (valor)=>{ fila.entraNombre = valor; }
+      });
+      row.appendChild(comboEntra);
+
+      if(filas.length > 1){
+        const btnQuitar = document.createElement('button');
+        btnQuitar.type = 'button';
+        btnQuitar.className = 'rm';
+        btnQuitar.title = 'Quitar sustitución';
+        btnQuitar.textContent = '✕';
+        btnQuitar.addEventListener('click', ()=>{ filas.splice(i,1); render(); });
+        row.appendChild(btnQuitar);
+      }
+
+      editor.appendChild(row);
+    });
+
+    const btnAnadir = document.createElement('button');
+    btnAnadir.type = 'button';
+    btnAnadir.className = 'ghost';
+    btnAnadir.textContent = '+ Añadir sustitución';
+    btnAnadir.addEventListener('click', ()=>{ filas.push({saleNombre:'', entraNombre:''}); render(); });
+    editor.appendChild(btnAnadir);
+  }
+  render();
 
   const acciones = document.createElement('div');
   acciones.className = 'version-actions';
   const btnGuardar = document.createElement('button');
   btnGuardar.type = 'button';
-  btnGuardar.textContent = '💾 Guardar sustitución';
-  btnGuardar.addEventListener('click', ()=> guardarSustitucion(contenedor, alineacion, partido, data, nombresOriginales, btnGuardar));
+  btnGuardar.textContent = textoGuardar || '💾 Guardar';
+  btnGuardar.addEventListener('click', async ()=>{
+    const filasValidas = filas.filter(f => f.saleNombre && f.entraNombre && f.saleNombre.trim() && f.entraNombre.trim());
+    if(filasValidas.length === 0){
+      toast('Elige al menos una sustitución completa (quién sale y quién entra)');
+      return;
+    }
+    btnGuardar.disabled = true;
+    btnGuardar.textContent = 'Guardando...';
+    try{
+      const rosterFinal = rosterHastaFila(filas.length);
+      await onGuardar(filasValidas, rosterFinal);
+    } finally {
+      btnGuardar.disabled = false;
+      btnGuardar.textContent = textoGuardar || '💾 Guardar';
+    }
+  });
   const btnCancelar = document.createElement('button');
   btnCancelar.type = 'button';
   btnCancelar.textContent = '✖ Cancelar';
-  btnCancelar.addEventListener('click', ()=> pintarJugadoresVersion(contenedor, alineacion, partido));
+  btnCancelar.addEventListener('click', onCancelar);
   acciones.appendChild(btnGuardar);
   acciones.appendChild(btnCancelar);
-  contenedor.appendChild(acciones);
+  wrap.appendChild(acciones);
+
+  return wrap;
 }
 
-async function guardarSustitucion(contenedor, alineacion, partido, data, nombresOriginales, btnGuardar){
+/* ---------- Registrar una sustitución nueva: crea una nueva versión reutilizando la misma imagen ---------- */
+function iniciarSustitucion(contenedor, alineacion, partido){
+  contenedor.innerHTML = '';
+  const rosterBase = alineacion.jugadores.map(j=>({...j}));
+  const editorEl = crearEditorSustituciones({
+    rosterBase,
+    filasIniciales: [],
+    textoAviso: 'Elige quién causa baja y quién entra en su lugar (antes del partido, no es un cambio en juego: quien sale queda a 0 minutos y quien entra a 60). Al guardar se creará una nueva versión con la misma foto, y esta quedará marcada como sustituida.',
+    textoGuardar: '💾 Guardar sustitución',
+    onGuardar: (filasValidas, rosterFinal) => guardarSustitucion(alineacion, partido, filasValidas, rosterFinal),
+    onCancelar: ()=> pintarJugadoresVersion(contenedor, alineacion, partido)
+  });
+  contenedor.appendChild(editorEl);
+}
+
+async function guardarSustitucion(alineacion, partido, filasValidas, rosterFinal){
   if(!supabaseListo()) return;
-
-  const jugadoresPlano = data.equipos.flatMap(e =>
-    e.jugadores.filter(j=>j.nombre.trim()).map(j => ({nombre:j.nombre.trim(), posicion:j.posicion, equipo:e.color}))
-  );
-  const nombresNuevos = jugadoresPlano.map(j=>j.nombre);
-  const nombresAntesSet = new Set(nombresOriginales);
-  const nombresAhoraSet = new Set(nombresNuevos);
-  const bajas = nombresOriginales.filter(n => !nombresAhoraSet.has(n));
-  const altas = nombresNuevos.filter(n => !nombresAntesSet.has(n));
-
-  if(bajas.length === 0 && altas.length === 0){
-    toast('No se ha detectado ningún cambio en la plantilla');
-    return;
-  }
-
-  btnGuardar.disabled = true;
-  btnGuardar.textContent = 'Guardando...';
 
   const nuevaVersion = Math.max(...partido.alineaciones.map(a=>a.version), 0) + 1;
   const alineacionId = `${partido.fecha}-v${nuevaVersion}`;
@@ -1079,31 +1340,89 @@ async function guardarSustitucion(contenedor, alineacion, partido, data, nombres
     fecha_mensaje: new Date().toISOString(),
     imagen_url: alineacion.imagen_url
   });
-  if(errAlineacion){
-    console.error(errAlineacion);
-    toast('Error guardando la sustitución');
-    btnGuardar.disabled = false;
-    btnGuardar.textContent = '💾 Guardar sustitución';
-    return;
-  }
+  if(errAlineacion){ console.error(errAlineacion); toast('Error guardando la sustitución'); return; }
 
-  if(jugadoresPlano.length){
+  if(rosterFinal.length){
     const { error: errJug } = await supabaseClient.from('jugadores_alineacion').insert(
-      jugadoresPlano.map(j => ({alineacion_id: alineacionId, nombre: j.nombre, posicion: j.posicion, equipo: j.equipo}))
+      rosterFinal.map(j => ({alineacion_id: alineacionId, nombre: j.nombre, posicion: j.posicion, equipo: j.equipo}))
     );
     if(errJug) console.error(errJug);
   }
 
-  const cambiosParaGuardar = bajas.map((baja, i) => ({jugador_baja: baja, jugador_entra: altas[i] || null}));
-  if(cambiosParaGuardar.length){
-    const { error: errCambios } = await supabaseClient.from('cambios').insert(
-      cambiosParaGuardar.map(c => ({alineacion_id: alineacionId, jugador_baja: c.jugador_baja, jugador_entra: c.jugador_entra}))
-    );
-    if(errCambios) console.error(errCambios);
-  }
+  const { error: errCambios } = await supabaseClient.from('cambios').insert(
+    filasValidas.map(f => ({alineacion_id: alineacionId, jugador_baja: f.saleNombre, jugador_entra: f.entraNombre}))
+  );
+  if(errCambios) console.error(errCambios);
+
+  for(const f of filasValidas){ await asegurarJugadorExiste(f.entraNombre); }
 
   await cargarDesdeSupabase();
   toast('Sustitución registrada ✅');
+  renderHistorial();
+}
+
+/* ---------- Corregir a posteriori la lista de sustituciones de una versión ---------- */
+function pintarCambiosVersion(contenedor, alineacion, partido){
+  contenedor.innerHTML = '';
+  const anterior = partido.alineaciones.find(x => x.version === alineacion.version - 1);
+
+  if(alineacion.cambios_respecto_anterior && alineacion.cambios_respecto_anterior.length){
+    const diffBox = document.createElement('div');
+    diffBox.className = 'diff-box';
+    diffBox.style.marginTop = '8px';
+    alineacion.cambios_respecto_anterior.forEach(c=>{
+      diffBox.innerHTML += `<div class="sub-row"><span class="out">${escapeHtml(c.jugador_baja)}</span><span class="arrow">→</span><span class="in">${c.jugador_entra ? escapeHtml(c.jugador_entra) : '(sin sustituto)'}</span></div>`;
+    });
+    contenedor.appendChild(diffBox);
+  }
+
+  if(anterior){
+    const btnEditar = document.createElement('button');
+    btnEditar.className = 'ghost';
+    btnEditar.type = 'button';
+    btnEditar.textContent = '✏️ Editar sustituciones';
+    btnEditar.addEventListener('click', ()=> editarCambiosVersion(contenedor, alineacion, anterior, partido));
+    contenedor.appendChild(btnEditar);
+  }
+}
+
+function editarCambiosVersion(contenedor, alineacion, anterior, partido){
+  contenedor.innerHTML = '';
+  const rosterBase = anterior.jugadores.map(j=>({...j}));
+  const editorEl = crearEditorSustituciones({
+    rosterBase,
+    filasIniciales: alineacion.cambios_respecto_anterior || [],
+    textoAviso: `Corrige las sustituciones registradas entre la v${anterior.version} y la v${alineacion.version}. Al guardar se recalcula la plantilla de esta versión a partir de la v${anterior.version} aplicando estas sustituciones en orden (útil para dobles sustituciones encadenadas).`,
+    textoGuardar: '💾 Guardar sustituciones',
+    onGuardar: (filasValidas, rosterFinal) => guardarEdicionCambios(contenedor, alineacion, partido, filasValidas, rosterFinal),
+    onCancelar: ()=> pintarCambiosVersion(contenedor, alineacion, partido)
+  });
+  contenedor.appendChild(editorEl);
+}
+
+async function guardarEdicionCambios(contenedor, alineacion, partido, filasValidas, rosterFinal){
+  if(!supabaseListo()) return;
+
+  await supabaseClient.from('jugadores_alineacion').delete().eq('alineacion_id', alineacion.id);
+  if(rosterFinal.length){
+    const { error: errJug } = await supabaseClient.from('jugadores_alineacion').insert(
+      rosterFinal.map(j => ({alineacion_id: alineacion.id, nombre: j.nombre, posicion: j.posicion, equipo: j.equipo}))
+    );
+    if(errJug){ console.error(errJug); toast('Error guardando la plantilla corregida'); return; }
+  }
+
+  await supabaseClient.from('cambios').delete().eq('alineacion_id', alineacion.id);
+  if(filasValidas.length){
+    const { error: errCambios } = await supabaseClient.from('cambios').insert(
+      filasValidas.map(f => ({alineacion_id: alineacion.id, jugador_baja: f.saleNombre, jugador_entra: f.entraNombre}))
+    );
+    if(errCambios){ console.error(errCambios); toast('Error guardando las sustituciones'); return; }
+  }
+
+  for(const f of filasValidas){ await asegurarJugadorExiste(f.entraNombre); }
+
+  await cargarDesdeSupabase();
+  toast('Sustituciones corregidas ✅');
   renderHistorial();
 }
 
@@ -1143,22 +1462,33 @@ function crearEditorEquiposHistorial(data, contenedor){
     equipo.jugadores.forEach((j, ji)=>{
       const row = document.createElement('div');
       row.className = 'prow';
-      row.innerHTML = `
-        <input type="text" value="${escapeHtml(j.nombre)}" placeholder="Nombre">
-        <select>
+
+      const combo = crearComboboxJugador({
+        valorInicial: j.nombre,
+        placeholder: 'Nombre',
+        onChange: (valor)=> j.nombre = valor
+      });
+      row.appendChild(combo);
+
+      const selectEl = document.createElement('select');
+      selectEl.innerHTML = `
           <option value="portero" ${j.posicion==='portero'?'selected':''}>Portero</option>
           <option value="defensa" ${j.posicion==='defensa'?'selected':''}>Defensa</option>
           <option value="medio" ${j.posicion==='medio'?'selected':''}>Medio</option>
-          <option value="delantero" ${j.posicion==='delantero'?'selected':''}>Delantero</option>
-        </select>
-        <button type="button" title="Quitar">✕</button>`;
-      const [inputEl, selectEl, btnEl] = row.children;
-      inputEl.addEventListener('input', ()=> j.nombre = inputEl.value);
+          <option value="delantero" ${j.posicion==='delantero'?'selected':''}>Delantero</option>`;
       selectEl.addEventListener('change', ()=> j.posicion = selectEl.value);
+      row.appendChild(selectEl);
+
+      const btnEl = document.createElement('button');
+      btnEl.type = 'button';
+      btnEl.title = 'Quitar';
+      btnEl.textContent = '✕';
       btnEl.addEventListener('click', ()=>{
         equipo.jugadores.splice(ji, 1);
         crearEditorEquiposHistorial(data, contenedor);
       });
+      row.appendChild(btnEl);
+
       rowsWrap.appendChild(row);
     });
     block.querySelector('button.ghost').addEventListener('click', ()=>{
@@ -1184,6 +1514,8 @@ async function guardarJugadoresVersion(contenedor, alineacion, data, btnGuardar,
     );
     if(error){ console.error(error); toast('Error guardando los cambios'); btnGuardar.disabled = false; btnGuardar.textContent = '💾 Guardar cambios'; return; }
   }
+
+  for(const j of jugadoresPlano){ await asegurarJugadorExiste(j.nombre); }
 
   alineacion.jugadores = jugadoresPlano;
   await cargarDesdeSupabase();
@@ -1804,6 +2136,7 @@ document.getElementById('f-import').addEventListener('change', async (e)=>{
 
 /* ---------- Carga inicial ---------- */
 cargarDesdeSupabase();
+cargarJugadoresCatalogo();
 </script>
 </body>
 </html>
