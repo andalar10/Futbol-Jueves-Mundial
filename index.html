@@ -123,6 +123,19 @@
   .prow input[type=text]{flex:1; background:none; border:none; padding:2px; font-size:14px;}
   .prow select{background:var(--surface); color:var(--text); border:1px solid var(--line); border-radius:6px; font-size:12px; padding:5px 6px;}
   .prow button{background:none; border:none; color:#8a5555; font-size:16px; cursor:pointer; padding:2px 4px;}
+  .prow{flex-wrap:wrap;}
+  .prow .combo-jugador{min-width:110px;}
+  .prow select.sel-bbdd{flex:1 1 100%; max-width:100%; font-size:12px; color:var(--text-dim);}
+  .prow select.sel-bbdd.sel-ambiguo{border-color:var(--amber); color:var(--amber);}
+  .prow select.sel-bbdd.sel-sin{border-color:#8a5555; color:#e08787;}
+
+  /* Vista Jugadores (BBDD) */
+  .jug-row{display:flex; gap:8px; align-items:center; flex-wrap:wrap; background:var(--surface-2); border:1px solid var(--line); border-radius:9px; padding:8px 10px; margin-bottom:6px;}
+  .jug-row input[type=text]{flex:1 1 110px; min-width:0; background:var(--surface); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:7px 8px; font-size:13.5px;}
+  .jug-row .uso{font-size:11.5px; color:var(--text-dim);}
+  .jug-row label{font-size:12px; color:var(--text-dim); display:flex; align-items:center; gap:4px;}
+  .jug-row button{background:var(--surface); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 9px; font-size:12.5px; cursor:pointer;}
+  .jug-row button.peligro{color:#e08787;}
 
   .diff-box{
     background:#221a12; border:1px solid #4a3a1f; border-radius:10px; padding:12px; margin-top:14px;
@@ -279,6 +292,20 @@
     <div id="historial-list"></div>
   </section>
 
+  <!-- VISTA: JUGADORES (BBDD) -->
+  <section id="view-jugadores" class="view">
+    <div class="card">
+      <h3 style="margin-top:0; font-size:14px; color:var(--text-dim);">Base de datos de jugadores</h3>
+      <p style="font-size:12.5px; color:var(--text-dim); margin:0 0 12px;">Si hay varios jugadores con el mismo nombre (p. ej. dos "Manu"), ponles un alias distinto (defensa, delantero...) para poder elegir cuál es en cada alineación.</p>
+      <div class="jug-row" id="jug-nuevo-row">
+        <input type="text" id="jug-nuevo-nombre" placeholder="Nombre (como sale en la foto)">
+        <input type="text" id="jug-nuevo-alias" placeholder="Alias (opcional)">
+        <button type="button" id="jug-nuevo-btn">+ Añadir</button>
+      </div>
+      <div id="jugadores-list"></div>
+    </div>
+  </section>
+
   <!-- VISTA: ESTADÍSTICAS -->
   <section id="view-stats" class="view">
     <div class="card">
@@ -312,6 +339,7 @@
 <nav class="tabs">
   <button class="tab-btn active" data-view="nuevo"><span class="ic">➕</span>Nuevo</button>
   <button class="tab-btn" data-view="historial"><span class="ic">📋</span>Historial</button>
+  <button class="tab-btn" data-view="jugadores"><span class="ic">👥</span>Jugadores</button>
   <button class="tab-btn" data-view="stats"><span class="ic">📊</span>Estadísticas</button>
 </nav>
 
@@ -379,7 +407,7 @@ async function cargarDesdeSupabase(){
         fecha_mensaje: a.fecha_mensaje,
         imagen_path: a.imagen_path,
         imagen_url: a.imagen_url,
-        jugadores: (a.jugadores_alineacion || []).map(j => ({nombre:j.nombre, posicion:j.posicion, equipo:j.equipo})),
+        jugadores: (a.jugadores_alineacion || []).map(j => ({nombre:j.nombre, posicion:j.posicion, equipo:j.equipo, jugador_id:j.jugador_id || null})),
         cambios_respecto_anterior: (a.cambios || []).map(c => ({jugador_baja:c.jugador_baja, jugador_entra:c.jugador_entra}))
       })),
     estadisticas: (p.estadisticas_partido_jugador || []).map(e => ({
@@ -412,6 +440,57 @@ function normalizarTexto(s){
 function buscarJugadorExacto(nombre){
   const limpio = (nombre||'').trim();
   return jugadoresCatalogo.find(j => j.nombre_display.trim() === limpio) || null;
+}
+
+// Etiqueta legible de un jugador de la BBDD: "Manu (delantero)" si tiene alias.
+function etiquetaJugador(j){
+  if(!j) return '';
+  return j.alias && j.alias.trim() ? `${j.nombre_display} (${j.alias.trim()})` : j.nombre_display;
+}
+
+// Nº de veces que cada jugador de la BBDD aparece en alineaciones ya guardadas
+// (sirve para preseleccionar el más habitual cuando hay varios con el mismo nombre).
+function usoJugadoresCatalogo(){
+  const uso = {};
+  (partidos || []).forEach(p => (p.alineaciones || []).forEach(a => (a.jugadores || []).forEach(j => {
+    if(j.jugador_id) uso[j.jugador_id] = (uso[j.jugador_id] || 0) + 1;
+  })));
+  return uso;
+}
+
+// Jugadores de la BBDD cuyo nombre coincide exactamente con el texto leído de
+// la foto (puede haber varios: dos "Manu" con alias distinto).
+function candidatosCatalogoPorNombre(nombre){
+  const limpio = (nombre||'').trim();
+  if(!limpio) return [];
+  return jugadoresCatalogo.filter(j => j.nombre_display.trim() === limpio);
+}
+
+// Preselección: si hay un único candidato, ese; si hay varios, el más usado
+// en alineaciones anteriores. Devuelve {jugador, ambiguo}.
+function sugerirJugadorCatalogo(nombre){
+  const cands = candidatosCatalogoPorNombre(nombre);
+  if(cands.length === 0) return {jugador:null, ambiguo:false};
+  if(cands.length === 1) return {jugador:cands[0], ambiguo:false};
+  const uso = usoJugadoresCatalogo();
+  const activos = cands.filter(j => j.activo !== false);
+  const pool = activos.length ? activos : cands;
+  pool.sort((a,b)=> (uso[b.id]||0) - (uso[a.id]||0));
+  return {jugador:pool[0], ambiguo:true};
+}
+
+// Asegura que cada jugador de la lista tenga jugador_id: usa la preselección
+// y, si no existe en la BBDD, lo da de alta. Modifica los objetos en sitio.
+async function resolverIdsJugadores(lista, campoNombre='nombre'){
+  for(const j of lista){
+    if(j.jugador_id) continue;
+    const nombre = (j[campoNombre]||'').trim();
+    if(!nombre) continue;
+    const sug = sugerirJugadorCatalogo(nombre).jugador;
+    if(sug){ j.jugador_id = sug.id; continue; }
+    const creado = await asegurarJugadorExiste(nombre);
+    j.jugador_id = creado && creado.id ? creado.id : null;
+  }
 }
 
 // Da de alta un jugador nuevo en el catálogo si no existe ya exactamente ese
@@ -462,19 +541,19 @@ function crearComboboxJugador({valorInicial='', placeholder='Nombre', fuente=nul
   wrap.appendChild(input);
   wrap.appendChild(lista);
 
-  const obtenerFuente = () => (fuente ? fuente() : jugadoresCatalogo);
+  const obtenerFuente = () => (fuente ? fuente() : jugadoresCatalogo.filter(j => j.activo !== false));
 
   function render(filtro){
     const norm = normalizarTexto(filtro);
     const candidatos = obtenerFuente()
-      .filter(j => !norm || normalizarTexto(j.nombre_display).includes(norm))
+      .filter(j => !norm || normalizarTexto(j.nombre_display).includes(norm) || normalizarTexto(j.alias).includes(norm))
       .slice(0, 8);
     lista.innerHTML = '';
     candidatos.forEach(j=>{
       const item = document.createElement('div');
       item.className = 'combo-item';
-      item.textContent = j.nombre_display;
-      item.addEventListener('mousedown', (e)=>{ e.preventDefault(); seleccionar(j.nombre_display); });
+      item.textContent = etiquetaJugador(j);
+      item.addEventListener('mousedown', (e)=>{ e.preventDefault(); seleccionar(j.nombre_display, j); });
       lista.appendChild(item);
     });
     const existeExacto = obtenerFuente().some(j => j.nombre_display.trim().toLowerCase() === filtro.trim().toLowerCase());
@@ -494,15 +573,15 @@ function crearComboboxJugador({valorInicial='', placeholder='Nombre', fuente=nul
     lista.style.display = 'block';
   }
 
-  function seleccionar(valor){
+  function seleccionar(valor, jugadorCatalogo=null){
     input.value = valor;
     lista.style.display = 'none';
-    if(onChange) onChange(valor);
+    if(onChange) onChange(valor, jugadorCatalogo);
   }
 
   input.addEventListener('input', ()=>{
     render(input.value);
-    if(onChange) onChange(input.value);
+    if(onChange) onChange(input.value, null);
   });
   input.addEventListener('focus', ()=> render(input.value));
   input.addEventListener('blur', ()=> setTimeout(()=> lista.style.display = 'none', 150));
@@ -511,6 +590,81 @@ function crearComboboxJugador({valorInicial='', placeholder='Nombre', fuente=nul
   wrap.setValue = (v) => { input.value = v; };
   return wrap;
 }
+
+/* ---------- Vista Jugadores: BBDD con nombre + alias ---------- */
+function renderJugadoresBBDD(){
+  const wrap = document.getElementById('jugadores-list');
+  wrap.innerHTML = '';
+  const uso = usoJugadoresCatalogo();
+  const repetidos = {};
+  jugadoresCatalogo.forEach(j => { const k = j.nombre_display.trim(); repetidos[k] = (repetidos[k]||0) + 1; });
+
+  jugadoresCatalogo.forEach(j=>{
+    const row = document.createElement('div');
+    row.className = 'jug-row';
+
+    const inNombre = document.createElement('input');
+    inNombre.type = 'text'; inNombre.value = j.nombre_display; inNombre.placeholder = 'Nombre';
+    const inAlias = document.createElement('input');
+    inAlias.type = 'text'; inAlias.value = j.alias || ''; inAlias.placeholder = repetidos[j.nombre_display.trim()] > 1 ? 'Alias (obligatorio: nombre repetido)' : 'Alias (opcional)';
+
+    const lblActivo = document.createElement('label');
+    const chk = document.createElement('input');
+    chk.type = 'checkbox'; chk.checked = j.activo !== false;
+    lblActivo.appendChild(chk); lblActivo.appendChild(document.createTextNode('Activo'));
+
+    const usoEl = document.createElement('span');
+    usoEl.className = 'uso';
+    usoEl.textContent = `${uso[j.id]||0} alineaciones`;
+
+    const btnGuardar = document.createElement('button');
+    btnGuardar.type = 'button'; btnGuardar.textContent = '💾';
+    btnGuardar.title = 'Guardar cambios';
+    btnGuardar.addEventListener('click', async ()=>{
+      const nombre = inNombre.value.trim();
+      const alias = inAlias.value.trim();
+      if(!nombre){ toast('El nombre no puede estar vacío'); return; }
+      btnGuardar.disabled = true;
+      const { error } = await supabaseClient.from('jugadores')
+        .update({nombre_display: nombre, alias: alias || null, activo: chk.checked}).eq('id', j.id);
+      btnGuardar.disabled = false;
+      if(error){ console.error(error); toast(error.code === '23505' ? 'Ya existe un jugador con ese nombre y alias' : 'Error guardando el jugador'); return; }
+      toast('Jugador guardado ✅');
+      await cargarJugadoresCatalogo();
+      renderJugadoresBBDD();
+    });
+
+    const btnBorrar = document.createElement('button');
+    btnBorrar.type = 'button'; btnBorrar.className = 'peligro'; btnBorrar.textContent = '🗑';
+    btnBorrar.title = (uso[j.id]||0) > 0 ? 'En uso: desactívalo en vez de borrarlo' : 'Borrar jugador';
+    btnBorrar.disabled = (uso[j.id]||0) > 0;
+    btnBorrar.addEventListener('click', async ()=>{
+      if(!confirm(`¿Borrar a ${etiquetaJugador(j)} de la BBDD?`)) return;
+      const { error } = await supabaseClient.from('jugadores').delete().eq('id', j.id);
+      if(error){ console.error(error); toast('No se pudo borrar'); return; }
+      await cargarJugadoresCatalogo();
+      renderJugadoresBBDD();
+    });
+
+    row.append(inNombre, inAlias, lblActivo, usoEl, btnGuardar, btnBorrar);
+    wrap.appendChild(row);
+  });
+}
+
+document.getElementById('jug-nuevo-btn').addEventListener('click', async ()=>{
+  if(!supabaseListo()) return;
+  const inN = document.getElementById('jug-nuevo-nombre');
+  const inA = document.getElementById('jug-nuevo-alias');
+  const nombre = inN.value.trim();
+  const alias = inA.value.trim();
+  if(!nombre){ toast('Escribe el nombre'); return; }
+  const { error } = await supabaseClient.from('jugadores').insert({nombre_display: nombre, alias: alias || null});
+  if(error){ console.error(error); toast(error.code === '23505' ? 'Ya existe un jugador con ese nombre y alias' : 'Error creando el jugador'); return; }
+  inN.value = ''; inA.value = '';
+  toast('Jugador añadido ✅');
+  await cargarJugadoresCatalogo();
+  renderJugadoresBBDD();
+});
 
 /* ---------- Estadísticas por jugador y partido (minutos/goles/tarjetas) ---------- */
 
@@ -580,6 +734,7 @@ document.querySelectorAll('.tab-btn').forEach(btn=>{
     document.getElementById('view-'+btn.dataset.view).classList.add('active');
     if(btn.dataset.view === 'historial'){ await cargarDesdeSupabase(); renderHistorial(); }
     if(btn.dataset.view === 'stats'){ await cargarDesdeSupabase(); renderStats(); }
+    if(btn.dataset.view === 'jugadores'){ await cargarDesdeSupabase(); await cargarJugadoresCatalogo(); renderJugadoresBBDD(); }
   });
 });
 
@@ -698,15 +853,92 @@ function renderRosterEditor(data){
   });
 }
 
-function crearFilaJugador(ei, ji, jugador){
-  const row = document.createElement('div');
-  row.className = 'prow';
+/* Controles de un jugador de alineación: texto del nombre (tal como sale en la
+   foto, con autocomplete) + selector del jugador de la BBDD asociado. Al abrir
+   preselecciona el jugador de la BBDD cuyo nombre coincide con el de la foto
+   (si hay varios con el mismo nombre, el más habitual, marcado como ambiguo
+   hasta que se confirme a mano). Muta `jugador`: {nombre, posicion, jugador_id}. */
+function crearControlesJugadorBBDD(jugador){
+  // si el id guardado ya no existe en la BBDD, se descarta
+  if(jugador.jugador_id && !jugadoresCatalogo.some(j => j.id === jugador.jugador_id)) jugador.jugador_id = null;
+  if(!jugador.jugador_id && (jugador.nombre||'').trim()){
+    const sug = sugerirJugadorCatalogo(jugador.nombre);
+    if(sug.jugador) jugador.jugador_id = sug.jugador.id;
+  }
+
+  const sel = document.createElement('select');
+  sel.className = 'sel-bbdd';
+
+  function opcion(valor, texto){
+    const o = document.createElement('option');
+    o.value = valor; o.textContent = texto;
+    return o;
+  }
+
+  function pintar(){
+    const nombre = (jugador.nombre||'').trim();
+    const cands = candidatosCatalogoPorNombre(nombre);
+    const idsCands = new Set(cands.map(j => j.id));
+    sel.innerHTML = '';
+    sel.appendChild(opcion('', nombre && cands.length === 0 ? '🆕 No está en la BBDD (se creará al guardar)' : '— Sin asignar —'));
+    if(cands.length){
+      const g = document.createElement('optgroup');
+      g.label = `Coinciden con «${nombre}»`;
+      cands.forEach(j => g.appendChild(opcion(j.id, etiquetaJugador(j))));
+      sel.appendChild(g);
+    }
+    const otros = jugadoresCatalogo.filter(j => !idsCands.has(j.id) && (j.activo !== false || j.id === jugador.jugador_id));
+    if(otros.length){
+      const g = document.createElement('optgroup');
+      g.label = 'Otros jugadores de la BBDD';
+      otros.forEach(j => g.appendChild(opcion(j.id, etiquetaJugador(j))));
+      sel.appendChild(g);
+    }
+    sel.value = jugador.jugador_id || '';
+    const ambiguo = cands.length > 1 && !jugador._confirmado;
+    sel.classList.toggle('sel-ambiguo', ambiguo);
+    sel.classList.toggle('sel-sin', !jugador.jugador_id && nombre !== '' && cands.length > 0);
+    sel.title = ambiguo ? 'Hay varios jugadores con este nombre: confirma cuál es' : 'Jugador de la BBDD asociado';
+  }
 
   const combo = crearComboboxJugador({
     valorInicial: jugador.nombre,
     placeholder: 'Nombre',
-    onChange: (valor)=> jugador.nombre = valor
+    onChange: (valor, jugCatalogo)=>{
+      jugador.nombre = valor;
+      if(jugCatalogo){
+        jugador.jugador_id = jugCatalogo.id;
+        jugador._confirmado = true;
+      } else {
+        jugador._confirmado = false;
+        jugador.jugador_id = sugerirJugadorCatalogo(valor).jugador?.id || null;
+      }
+      pintar();
+    }
   });
+
+  sel.addEventListener('change', ()=>{
+    const id = sel.value;
+    if(id){
+      const j = jugadoresCatalogo.find(x => x.id === id);
+      jugador.jugador_id = id;
+      jugador._confirmado = true;
+      if(j){ jugador.nombre = j.nombre_display; combo.setValue(j.nombre_display); }
+    } else {
+      jugador.jugador_id = null;
+    }
+    pintar();
+  });
+
+  pintar();
+  return {combo, sel};
+}
+
+function crearFilaJugador(ei, ji, jugador){
+  const row = document.createElement('div');
+  row.className = 'prow';
+
+  const {combo, sel: selBBDD} = crearControlesJugadorBBDD(jugador);
   row.appendChild(combo);
 
   const selectEl = document.createElement('select');
@@ -727,6 +959,7 @@ function crearFilaJugador(ei, ji, jugador){
     renderRosterEditor(extraccionActual);
   });
   row.appendChild(btnEl);
+  row.appendChild(selBBDD);
 
   return row;
 }
@@ -812,7 +1045,7 @@ document.getElementById('btn-guardar').addEventListener('click', async ()=>{
   if(!extraccionActual){ toast('Falta la alineación'); return; }
 
   const jugadoresPlano = extraccionActual.equipos.flatMap(e =>
-    e.jugadores.filter(j=>j.nombre.trim()).map(j => ({nombre:j.nombre.trim(), posicion:j.posicion, equipo:e.color}))
+    e.jugadores.filter(j=>j.nombre.trim()).map(j => ({nombre:j.nombre.trim(), posicion:j.posicion, equipo:e.color, jugador_id:j.jugador_id || null}))
   );
 
   const btnGuardar = document.getElementById('btn-guardar');
@@ -857,8 +1090,9 @@ document.getElementById('btn-guardar').addEventListener('click', async ()=>{
   if(errAlineacion){ console.error(errAlineacion); toast('Error guardando la alineación'); btnGuardar.disabled = false; btnGuardar.textContent = 'Guardar partido'; return; }
 
   if(jugadoresPlano.length){
+    await resolverIdsJugadores(jugadoresPlano);
     const { error: errJug } = await supabaseClient.from('jugadores_alineacion').insert(
-      jugadoresPlano.map(j => ({alineacion_id: alineacionId, nombre: j.nombre, posicion: j.posicion, equipo: j.equipo}))
+      jugadoresPlano.map(j => ({alineacion_id: alineacionId, nombre: j.nombre, posicion: j.posicion, equipo: j.equipo, jugador_id: j.jugador_id || null}))
     );
     if(errJug) console.error(errJug);
   }
@@ -869,8 +1103,6 @@ document.getElementById('btn-guardar').addEventListener('click', async ()=>{
     );
     if(errCambios) console.error(errCambios);
   }
-
-  for(const j of jugadoresPlano){ await asegurarJugadorExiste(j.nombre); }
 
   await cargarDesdeSupabase();
   toast('Partido guardado ✅');
@@ -1130,7 +1362,7 @@ function agruparPorEquipo(jugadores){
   (jugadores||[]).forEach(j=>{
     const key = j.equipo || 'otro';
     if(!mapa.has(key)) mapa.set(key, []);
-    mapa.get(key).push({nombre:j.nombre, posicion:j.posicion});
+    mapa.get(key).push({nombre:j.nombre, posicion:j.posicion, jugador_id:j.jugador_id || null});
   });
   if(mapa.size === 0){ mapa.set('azul', []); mapa.set('rojo', []); }
   return {equipos: [...mapa.entries()].map(([color, jugadores])=>({color, jugadores}))};
@@ -1209,7 +1441,7 @@ function crearEditorSustituciones({rosterBase, filasIniciales, textoAviso, texto
       const f = filas[k];
       if(!f.saleNombre || !f.entraNombre) continue;
       const idx = roster.findIndex(j => j.nombre === f.saleNombre);
-      if(idx !== -1) roster[idx] = {...roster[idx], nombre: f.entraNombre};
+      if(idx !== -1) roster[idx] = {...roster[idx], nombre: f.entraNombre, jugador_id: null};
     }
     return roster;
   }
@@ -1343,8 +1575,9 @@ async function guardarSustitucion(alineacion, partido, filasValidas, rosterFinal
   if(errAlineacion){ console.error(errAlineacion); toast('Error guardando la sustitución'); return; }
 
   if(rosterFinal.length){
+    await resolverIdsJugadores(rosterFinal);
     const { error: errJug } = await supabaseClient.from('jugadores_alineacion').insert(
-      rosterFinal.map(j => ({alineacion_id: alineacionId, nombre: j.nombre, posicion: j.posicion, equipo: j.equipo}))
+      rosterFinal.map(j => ({alineacion_id: alineacionId, nombre: j.nombre, posicion: j.posicion, equipo: j.equipo, jugador_id: j.jugador_id || null}))
     );
     if(errJug) console.error(errJug);
   }
@@ -1353,8 +1586,6 @@ async function guardarSustitucion(alineacion, partido, filasValidas, rosterFinal
     filasValidas.map(f => ({alineacion_id: alineacionId, jugador_baja: f.saleNombre, jugador_entra: f.entraNombre}))
   );
   if(errCambios) console.error(errCambios);
-
-  for(const f of filasValidas){ await asegurarJugadorExiste(f.entraNombre); }
 
   await cargarDesdeSupabase();
   toast('Sustitución registrada ✅');
@@ -1405,8 +1636,9 @@ async function guardarEdicionCambios(contenedor, alineacion, partido, filasValid
 
   await supabaseClient.from('jugadores_alineacion').delete().eq('alineacion_id', alineacion.id);
   if(rosterFinal.length){
+    await resolverIdsJugadores(rosterFinal);
     const { error: errJug } = await supabaseClient.from('jugadores_alineacion').insert(
-      rosterFinal.map(j => ({alineacion_id: alineacion.id, nombre: j.nombre, posicion: j.posicion, equipo: j.equipo}))
+      rosterFinal.map(j => ({alineacion_id: alineacion.id, nombre: j.nombre, posicion: j.posicion, equipo: j.equipo, jugador_id: j.jugador_id || null}))
     );
     if(errJug){ console.error(errJug); toast('Error guardando la plantilla corregida'); return; }
   }
@@ -1418,8 +1650,6 @@ async function guardarEdicionCambios(contenedor, alineacion, partido, filasValid
     );
     if(errCambios){ console.error(errCambios); toast('Error guardando las sustituciones'); return; }
   }
-
-  for(const f of filasValidas){ await asegurarJugadorExiste(f.entraNombre); }
 
   await cargarDesdeSupabase();
   toast('Sustituciones corregidas ✅');
@@ -1463,11 +1693,7 @@ function crearEditorEquiposHistorial(data, contenedor){
       const row = document.createElement('div');
       row.className = 'prow';
 
-      const combo = crearComboboxJugador({
-        valorInicial: j.nombre,
-        placeholder: 'Nombre',
-        onChange: (valor)=> j.nombre = valor
-      });
+      const {combo, sel: selBBDD} = crearControlesJugadorBBDD(j);
       row.appendChild(combo);
 
       const selectEl = document.createElement('select');
@@ -1488,6 +1714,7 @@ function crearEditorEquiposHistorial(data, contenedor){
         crearEditorEquiposHistorial(data, contenedor);
       });
       row.appendChild(btnEl);
+      row.appendChild(selBBDD);
 
       rowsWrap.appendChild(row);
     });
@@ -1504,18 +1731,17 @@ async function guardarJugadoresVersion(contenedor, alineacion, data, btnGuardar,
   btnGuardar.textContent = 'Guardando...';
 
   const jugadoresPlano = data.equipos.flatMap(e =>
-    e.jugadores.filter(j=>j.nombre.trim()).map(j => ({nombre:j.nombre.trim(), posicion:j.posicion, equipo:e.color}))
+    e.jugadores.filter(j=>j.nombre.trim()).map(j => ({nombre:j.nombre.trim(), posicion:j.posicion, equipo:e.color, jugador_id:j.jugador_id || null}))
   );
+  await resolverIdsJugadores(jugadoresPlano);
 
   await supabaseClient.from('jugadores_alineacion').delete().eq('alineacion_id', alineacion.id);
   if(jugadoresPlano.length){
     const { error } = await supabaseClient.from('jugadores_alineacion').insert(
-      jugadoresPlano.map(j => ({alineacion_id: alineacion.id, nombre: j.nombre, posicion: j.posicion, equipo: j.equipo}))
+      jugadoresPlano.map(j => ({alineacion_id: alineacion.id, nombre: j.nombre, posicion: j.posicion, equipo: j.equipo, jugador_id: j.jugador_id || null}))
     );
     if(error){ console.error(error); toast('Error guardando los cambios'); btnGuardar.disabled = false; btnGuardar.textContent = '💾 Guardar cambios'; return; }
   }
-
-  for(const j of jugadoresPlano){ await asegurarJugadorExiste(j.nombre); }
 
   alineacion.jugadores = jugadoresPlano;
   await cargarDesdeSupabase();
@@ -2108,7 +2334,7 @@ document.getElementById('f-import').addEventListener('change', async (e)=>{
         await supabaseClient.from('jugadores_alineacion').delete().eq('alineacion_id', alineacionId);
         if((a.jugadores || []).length){
           await supabaseClient.from('jugadores_alineacion').insert(
-            a.jugadores.map(j => ({alineacion_id: alineacionId, nombre: j.nombre, posicion: j.posicion || '', equipo: j.equipo || ''}))
+            a.jugadores.map(j => ({alineacion_id: alineacionId, nombre: j.nombre, posicion: j.posicion || '', equipo: j.equipo || '', jugador_id: (j.jugador_id && jugadoresCatalogo.some(c => c.id === j.jugador_id)) ? j.jugador_id : null}))
           );
         }
 

@@ -6,6 +6,17 @@ Cada entrada describe qué puede hacer ahora el usuario que no podía antes.
 ## [Sin publicar]
 
 ### Añadido
+- **BBDD de jugadores con nombre + alias** (nueva pestaña "👥 Jugadores"):
+  permite tener varios jugadores con el mismo nombre (p. ej. dos "Manu") y
+  distinguirlos con un alias ("defensa", "delantero"...). Se pueden crear,
+  editar, desactivar y borrar (solo si no están en uso en ninguna alineación).
+- **Jugador de la BBDD asociado a cada jugador de la alineación**: al leer la
+  foto (o al editar jugadores en el historial) cada nombre queda
+  preseleccionado con el jugador de la BBDD que coincide; si hay varios con
+  ese nombre se propone el más habitual, marcado en ámbar hasta confirmarlo.
+  Se puede cambiar en un desplegable bajo cada fila; el asociado se guarda
+  (`jugador_id`) junto con la alineación y se conserva en sustituciones y en
+  el export/import JSON. Las estadísticas y el PDF siguen usando el nombre.
 - **Catálogo de jugadores** (tabla `jugadores`, puramente aditiva): guarda los
   nicks/apodos reales del grupo para poder reutilizarlos de forma consistente
   en toda la app, en vez de escribir el nombre suelto cada vez. Se sembró con
